@@ -3,7 +3,7 @@
 	"name": "Flint",
 	"version": "0.1.0",
 	"minAppVersion": "1.5.0",
-	"description": "Portable AI + capture automation woven into your vault.",
+	"description": "Weave AI chat, web-clip cleanup, and capture triage into your vault.",
 	"author": "Spencer",
 	"isDesktopOnly": false
 }
