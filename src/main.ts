@@ -12,6 +12,7 @@ import { buildDataUri, embedImageDataUri } from "./generate/compose";
 import {
 	buildHtmlPagePrompt,
 	nextAvailablePath,
+	sanitizeHtmlDocument,
 	stripReplyFences,
 } from "./generate/html";
 import {
@@ -198,7 +199,9 @@ export default class FlintPlugin extends Plugin {
 	}
 
 	/** Asks the active provider to turn `content` into a self-contained HTML
-	 * document, defensively stripping any Markdown fencing in the reply. */
+	 * document, defensively stripping any Markdown fencing in the reply, then
+	 * sanitizing the result before it's ever written to the vault — the AI
+	 * reply is untrusted output that can be prompt-injected via note content. */
 	private async generateHtmlPage(
 		file: TFile,
 		content: string,
@@ -208,7 +211,7 @@ export default class FlintPlugin extends Plugin {
 			buildHtmlPagePrompt(file.basename, content),
 			{ model: this.settings.activeModel },
 		);
-		return stripReplyFences(reply);
+		return sanitizeHtmlDocument(stripReplyFences(reply));
 	}
 
 	/** Generates a base64-encoded image for `file`/`content`: one provider

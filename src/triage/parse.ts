@@ -52,6 +52,46 @@ export function extractBullets(content: string): InboxBullet[] {
 	return bullets;
 }
 
+/** Hard cap on a routed `nextStep`'s length once it's appended as a task
+ * line in a tracker note. */
+export const NEXT_STEP_MAX_LENGTH = 200;
+
+// A leading Markdown structural token (heading, list item, blockquote, task
+// checkbox) that — left unescaped — would reopen a new block when the
+// nextStep is appended as a line under "## Next small steps".
+const LEADING_MARKDOWN_STRUCTURE = /^(\s*)(#{1,6}|[-*>]|\[[ xX]?\])/;
+
+// biome-ignore lint/suspicious/noControlCharactersInRegex: stripping control chars is the point here.
+const CONTROL_CHAR_PATTERN = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g;
+
+/**
+ * Sanitizes a single classification's `nextStep` before it's ever appended
+ * to a tracker note: retrieved web/vault text an attacker controls can be
+ * prompt-injected into the LLM's JSON reply, so `nextStep` can't be trusted
+ * to be a single plain line. Collapses newlines/control characters to
+ * spaces, escapes a leading Markdown-structural token so it can't reopen a
+ * heading/list/blockquote/checkbox, and caps the length.
+ */
+export function sanitizeNextStep(nextStep: string): string {
+	let sanitized = nextStep
+		.split(/\r\n|\r|\n/)
+		.join(" ")
+		.replace(CONTROL_CHAR_PATTERN, "")
+		.replace(/\s+/g, " ")
+		.trim();
+
+	sanitized = sanitized.replace(
+		LEADING_MARKDOWN_STRUCTURE,
+		(_match, ws: string, token: string) => `${ws}\\${token}`,
+	);
+
+	if (sanitized.length > NEXT_STEP_MAX_LENGTH) {
+		sanitized = sanitized.slice(0, NEXT_STEP_MAX_LENGTH).trim();
+	}
+
+	return sanitized;
+}
+
 const JSON_FENCE_PATTERN = /```(?:json)?\s*([\s\S]*?)```/i;
 
 /**
@@ -59,6 +99,8 @@ const JSON_FENCE_PATTERN = /```(?:json)?\s*([\s\S]*?)```/i;
  * fence if present, then validates the parsed value is an array of
  * `{item, target, nextStep}` objects. Throws a descriptive `Error` on any
  * unparseable/malformed input — callers must never write garbage to the vault.
+ * Each entry's `nextStep` is sanitized (see `sanitizeNextStep`) before being
+ * returned, since it's untrusted LLM output derived from retrieved content.
  */
 export function parseTriageResponse(raw: string): TriageClassification[] {
 	const fenced = raw.match(JSON_FENCE_PATTERN);
@@ -96,7 +138,7 @@ export function parseTriageResponse(raw: string): TriageClassification[] {
 		classifications.push({
 			item: item["item"] as string,
 			target: item["target"] as string,
-			nextStep: item["nextStep"] as string,
+			nextStep: sanitizeNextStep(item["nextStep"] as string),
 		});
 	}
 

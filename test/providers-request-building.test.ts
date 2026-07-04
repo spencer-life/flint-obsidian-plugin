@@ -7,9 +7,8 @@ import {
 } from "./obsidian-mock";
 
 const { AnthropicProvider } = await import("../src/providers/anthropic");
-const { OpenAICompatibleProvider, NIM_BASE_URL } = await import(
-	"../src/providers/openai-compatible"
-);
+const { OpenAICompatibleProvider, NIM_BASE_URL, validateBaseUrl } =
+	await import("../src/providers/openai-compatible");
 
 beforeEach(() => {
 	resetObsidianMock();
@@ -108,5 +107,51 @@ describe("OpenAICompatibleProvider.chat request building", () => {
 		expect(requestUrlCalls[0]?.url).toBe(
 			"http://localhost:11434/v1/chat/completions",
 		);
+	});
+
+	test("rejects a base URL pointed at a non-local http host before requesting", async () => {
+		const provider = new OpenAICompatibleProvider({
+			baseUrl: "http://example.com",
+			apiKey: "key",
+		});
+
+		await expect(
+			provider.chat([{ role: "user", content: "hi" }], { model: "m" }),
+		).rejects.toThrow();
+		expect(requestUrlCalls).toHaveLength(0);
+	});
+});
+
+describe("validateBaseUrl", () => {
+	test("accepts a well-formed https URL", () => {
+		expect(() => validateBaseUrl("https://api.openai.com/v1")).not.toThrow();
+	});
+
+	test("accepts http://localhost and http://127.0.0.1 (Ollama)", () => {
+		expect(() => validateBaseUrl("http://localhost:11434/v1")).not.toThrow();
+		expect(() => validateBaseUrl("http://127.0.0.1:11434/v1")).not.toThrow();
+	});
+
+	test("rejects a non-local http URL", () => {
+		expect(() => validateBaseUrl("http://api.openai.com/v1")).toThrow();
+	});
+
+	test("rejects embedded credentials", () => {
+		expect(() =>
+			validateBaseUrl("https://user:pass@api.openai.com/v1"),
+		).toThrow();
+	});
+
+	test("rejects a URL fragment", () => {
+		expect(() => validateBaseUrl("https://api.openai.com/v1#frag")).toThrow();
+	});
+
+	test("rejects a non-http(s) scheme", () => {
+		expect(() => validateBaseUrl("ftp://api.openai.com/v1")).toThrow();
+		expect(() => validateBaseUrl("javascript:alert(1)")).toThrow();
+	});
+
+	test("rejects a malformed URL", () => {
+		expect(() => validateBaseUrl("not a url")).toThrow();
 	});
 });

@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { extractBullets, parseTriageResponse } from "../src/triage/parse";
+import {
+	extractBullets,
+	NEXT_STEP_MAX_LENGTH,
+	parseTriageResponse,
+	sanitizeNextStep,
+} from "../src/triage/parse";
 
 describe("extractBullets", () => {
 	test("extracts QuickAdd-style timestamped bullets", () => {
@@ -104,5 +109,64 @@ describe("parseTriageResponse", () => {
 	test("throws when an entry is missing a required field", () => {
 		const raw = JSON.stringify([{ item: "x", target: "ideas" }]);
 		expect(() => parseTriageResponse(raw)).toThrow();
+	});
+
+	test("sanitizes an injected multi-line/markdown nextStep before returning it", () => {
+		const raw = JSON.stringify([
+			{
+				item: "x",
+				target: "ideas",
+				nextStep: "# Fake heading\n- fake bullet\ndo the actual thing",
+			},
+		]);
+
+		const result = parseTriageResponse(raw);
+
+		expect(result[0]?.nextStep).not.toContain("\n");
+		expect(result[0]?.nextStep?.startsWith("\\#")).toBe(true);
+	});
+});
+
+describe("sanitizeNextStep", () => {
+	test("collapses newlines and control characters into a single line", () => {
+		expect(sanitizeNextStep("line one\nline two\r\nline three")).toBe(
+			"line one line two line three",
+		);
+
+		// Embed a NUL and a BEL control character without putting a raw
+		// control byte in the source file itself.
+		const withControlChars = `a${String.fromCharCode(0)}b${String.fromCharCode(7)}c`;
+		expect(sanitizeNextStep(withControlChars)).toBe("abc");
+	});
+
+	test("collapses repeated whitespace", () => {
+		expect(sanitizeNextStep("too    many   spaces")).toBe("too many spaces");
+	});
+
+	test("escapes a leading heading marker", () => {
+		expect(sanitizeNextStep("# not a heading")).toBe("\\# not a heading");
+	});
+
+	test("escapes a leading list/blockquote marker", () => {
+		expect(sanitizeNextStep("- not a bullet")).toBe("\\- not a bullet");
+		expect(sanitizeNextStep("* not a bullet")).toBe("\\* not a bullet");
+		expect(sanitizeNextStep("> not a quote")).toBe("\\> not a quote");
+	});
+
+	test("escapes a leading task checkbox", () => {
+		expect(sanitizeNextStep("[ ] not a checkbox")).toBe("\\[ ] not a checkbox");
+		expect(sanitizeNextStep("[x] not a checkbox")).toBe("\\[x] not a checkbox");
+	});
+
+	test("leaves an ordinary sentence untouched", () => {
+		expect(sanitizeNextStep("search a domain registrar")).toBe(
+			"search a domain registrar",
+		);
+	});
+
+	test("caps length at NEXT_STEP_MAX_LENGTH", () => {
+		const long = "x".repeat(NEXT_STEP_MAX_LENGTH + 50);
+		const result = sanitizeNextStep(long);
+		expect(result.length).toBeLessThanOrEqual(NEXT_STEP_MAX_LENGTH);
 	});
 });

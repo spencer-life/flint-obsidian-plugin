@@ -11,17 +11,27 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Use Node.js
-        uses: actions/setup-node@v4
+      # actions/checkout v4.3.0
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          node-version: "20.x"
+          persist-credentials: false
+
+      # oven-sh/setup-bun v2.2.0
+      - name: Use Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: latest
+
+      # --ignore-scripts is intentionally NOT used here: esbuild's postinstall
+      # (lib/npm/node-platform.ts install.js) is required to select/link the
+      # correct platform binary — skipping it breaks `bun run build`. Bun
+      # already restricts lifecycle scripts to a curated trusted-package
+      # default list (esbuild included), so this isn't an arbitrary-script risk.
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
 
       - name: Build plugin
-        run: |
-          npm install
-          npm run build
+        run: bun run build
 
       - name: Create release
         env:

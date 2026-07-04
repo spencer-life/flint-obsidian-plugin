@@ -6,8 +6,13 @@ import {
 	setRequestUrlHandler,
 } from "./obsidian-mock";
 
-const { fetchAndConvert, htmlToMarkdown, THIN_CONTENT_THRESHOLD } =
-	await import("../src/ingest/refetch");
+const {
+	fetchAndConvert,
+	htmlToMarkdown,
+	isSafePublicUrl,
+	MAX_RESPONSE_BYTES,
+	THIN_CONTENT_THRESHOLD,
+} = await import("../src/ingest/refetch");
 
 beforeEach(() => {
 	resetObsidianMock();
@@ -98,5 +103,67 @@ describe("fetchAndConvert", () => {
 
 	test("THIN_CONTENT_THRESHOLD is a positive character count", () => {
 		expect(THIN_CONTENT_THRESHOLD).toBeGreaterThan(0);
+	});
+
+	test("refuses to fetch a private/loopback/file URL, without a Firecrawl key", async () => {
+		await expect(fetchAndConvert("http://localhost/secret")).rejects.toThrow();
+		await expect(fetchAndConvert("http://127.0.0.1/secret")).rejects.toThrow();
+		await expect(fetchAndConvert("file:///etc/passwd")).rejects.toThrow();
+		expect(requestUrlCalls).toHaveLength(0);
+	});
+
+	test("rejects a response whose content-type isn't text/html-ish", async () => {
+		setRequestUrlHandler(() => ({
+			text: "binary-ish content",
+			headers: { "Content-Type": "application/octet-stream" },
+		}));
+
+		await expect(
+			fetchAndConvert("https://example.com/file.bin"),
+		).rejects.toThrow(/content-type/);
+	});
+
+	test("rejects a response over the byte cap", async () => {
+		setRequestUrlHandler(() => ({
+			text: "x".repeat(MAX_RESPONSE_BYTES + 1),
+		}));
+
+		await expect(fetchAndConvert("https://example.com/huge")).rejects.toThrow(
+			/exceeds/,
+		);
+	});
+});
+
+describe("isSafePublicUrl", () => {
+	test("allows public https/http URLs", () => {
+		expect(isSafePublicUrl("https://example.com/article")).toBe(true);
+		expect(isSafePublicUrl("http://example.com/article")).toBe(true);
+	});
+
+	test("blocks localhost and loopback addresses", () => {
+		expect(isSafePublicUrl("http://localhost/x")).toBe(false);
+		expect(isSafePublicUrl("http://127.0.0.1/x")).toBe(false);
+		expect(isSafePublicUrl("http://[::1]/x")).toBe(false);
+	});
+
+	test("blocks RFC 1918 private ranges and link-local", () => {
+		expect(isSafePublicUrl("http://10.0.0.5/x")).toBe(false);
+		expect(isSafePublicUrl("http://172.16.0.5/x")).toBe(false);
+		expect(isSafePublicUrl("http://192.168.1.5/x")).toBe(false);
+		expect(isSafePublicUrl("http://169.254.1.1/x")).toBe(false);
+	});
+
+	test("blocks .local mDNS hostnames", () => {
+		expect(isSafePublicUrl("http://my-nas.local/x")).toBe(false);
+	});
+
+	test("blocks non-http(s) schemes", () => {
+		expect(isSafePublicUrl("file:///etc/passwd")).toBe(false);
+		expect(isSafePublicUrl("obsidian://open?vault=x")).toBe(false);
+		expect(isSafePublicUrl("data:text/html,<script>1</script>")).toBe(false);
+	});
+
+	test("blocks a malformed URL", () => {
+		expect(isSafePublicUrl("not a url")).toBe(false);
 	});
 });

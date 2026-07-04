@@ -10,6 +10,45 @@ export interface OpenAICompatibleConfig {
 }
 
 /**
+ * Validates a user-configurable provider base URL (OpenAI-compatible/Ollama)
+ * before it's ever used to send a bearer key: requires a well-formed
+ * `https://` URL, or `http://localhost`/`http://127.0.0.1` for a local Ollama
+ * server. Rejects embedded credentials (`user:pass@host`), URL fragments,
+ * and any other scheme. A mistyped or look-alike host must never silently
+ * receive the configured API key.
+ */
+export function validateBaseUrl(url: string): void {
+	let parsed: URL;
+	try {
+		parsed = new URL(url);
+	} catch {
+		throw new Error(`Invalid base URL: "${url}" is not a well-formed URL.`);
+	}
+
+	if (parsed.username || parsed.password) {
+		throw new Error(
+			`Invalid base URL: "${url}" must not contain embedded credentials.`,
+		);
+	}
+
+	if (parsed.hash) {
+		throw new Error(`Invalid base URL: "${url}" must not contain a fragment.`);
+	}
+
+	if (parsed.protocol === "https:") return;
+
+	const isLocalHttp =
+		parsed.protocol === "http:" &&
+		(parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1");
+	if (isLocalHttp) return;
+
+	throw new Error(
+		`Invalid base URL: "${url}" must use https:// (http:// is only allowed ` +
+			"for localhost/127.0.0.1, e.g. a local Ollama server).",
+	);
+}
+
+/**
  * Provider adapter for any OpenAI-compatible `/chat/completions` endpoint
  * (NVIDIA NIM, Ollama, OpenAI itself).
  */
@@ -19,6 +58,7 @@ export class OpenAICompatibleProvider implements Provider {
 	constructor(private config: OpenAICompatibleConfig) {}
 
 	async chat(messages: ChatMessage[], opts: ChatOptions): Promise<string> {
+		validateBaseUrl(this.config.baseUrl);
 		const response = await requestUrl({
 			url: `${this.config.baseUrl}/chat/completions`,
 			method: "POST",
@@ -41,6 +81,7 @@ export class OpenAICompatibleProvider implements Provider {
 		opts: ChatOptions,
 		onToken: TokenHandler,
 	): Promise<string> {
+		validateBaseUrl(this.config.baseUrl);
 		try {
 			const response = await fetch(`${this.config.baseUrl}/chat/completions`, {
 				method: "POST",
@@ -58,10 +99,10 @@ export class OpenAICompatibleProvider implements Provider {
 			});
 
 			if (!response.ok) {
-				const errorBody = await response.text().catch(() => "");
-				throw new Error(
-					`Request failed (${response.status}): ${errorBody || response.statusText}`,
-				);
+				// Deliberately don't include the response body in the thrown
+				// message: it can contain provider-specific error detail we don't
+				// want surfacing verbatim in a user-facing Notice.
+				throw new Error(`Request failed: ${response.status}`);
 			}
 
 			let full = "";

@@ -1,10 +1,50 @@
 import { Component, MarkdownRenderer } from "obsidian";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { runPipeline } from "../chat/pipeline";
+import { neutralizeRemoteImageMarkdown, runPipeline } from "../chat/pipeline";
 import { getProvider } from "../providers";
 import type { ChatMessage } from "../providers/types";
 import type { ProviderId } from "../settings";
 import { useApp, usePlugin } from "./context";
+
+// Protocol-relative (`//host/...`) or absolute http(s) URL.
+const REMOTE_URL_PATTERN = /^(?:https?:)?\/\//i;
+
+/** True when any URL in a (possibly comma-separated `srcset`) attribute
+ * value points at a remote host. */
+function hasRemoteUrl(value: string | null): boolean {
+	if (!value) return false;
+	return value
+		.split(",")
+		.map((part) => part.trim().split(/\s+/)[0] ?? "")
+		.some((url) => REMOTE_URL_PATTERN.test(url));
+}
+
+/**
+ * Post-render DOM scrub, as defense-in-depth alongside
+ * `neutralizeRemoteImageMarkdown`: removes any `img`/`iframe`/`audio`/
+ * `video`/`embed`/`object`/`source` left with a remote `src`/`srcset` (e.g.
+ * from raw HTML the model embedded in its reply, which Markdown transforms
+ * alone can't catch) and any `link[rel=stylesheet]`, both of which Obsidian's
+ * `MarkdownRenderer` would otherwise silently fetch.
+ */
+function scrubRemoteEmbeds(root: HTMLElement): void {
+	const embeds = root.querySelectorAll(
+		"img,iframe,audio,video,embed,object,source",
+	);
+	for (const el of Array.from(embeds)) {
+		if (
+			hasRemoteUrl(el.getAttribute("src")) ||
+			hasRemoteUrl(el.getAttribute("srcset"))
+		) {
+			el.remove();
+		}
+	}
+	for (const el of Array.from(
+		root.querySelectorAll('link[rel="stylesheet"]'),
+	)) {
+		el.remove();
+	}
+}
 
 interface FlintMessage {
 	id: string;
@@ -40,9 +80,19 @@ function AssistantMarkdown({ content }: { content: string }) {
 		component.load();
 		el.empty();
 		const sourcePath = app.workspace.getActiveFile()?.path ?? "";
-		void MarkdownRenderer.render(app, content, el, sourcePath, component);
+		let cancelled = false;
+		void MarkdownRenderer.render(
+			app,
+			neutralizeRemoteImageMarkdown(content),
+			el,
+			sourcePath,
+			component,
+		).then(() => {
+			if (!cancelled) scrubRemoteEmbeds(el);
+		});
 
 		return () => {
+			cancelled = true;
 			component.unload();
 		};
 	}, [app, content]);

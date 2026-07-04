@@ -1,5 +1,6 @@
-import { type App, PluginSettingTab, Setting } from "obsidian";
+import { type App, Notice, PluginSettingTab, Setting } from "obsidian";
 import type FlintPlugin from "./main";
+import { validateBaseUrl } from "./providers/openai-compatible";
 
 export type ProviderId = "anthropic" | "nim" | "openai" | "ollama";
 export type Ambition = "lean" | "balanced" | "ambitious";
@@ -116,24 +117,47 @@ export class FlintSettingTab extends PluginSettingTab {
 					});
 			});
 
-		new Setting(containerEl).setName("OpenAI base URL").addText((text) => {
-			text
-				.setPlaceholder("https://api.openai.com/v1")
-				.setValue(this.plugin.settings.providers.openai.baseUrl)
-				.onChange(async (value) => {
-					this.plugin.settings.providers.openai.baseUrl = value;
-					await this.plugin.saveSettings();
-				});
-		});
+		new Setting(containerEl)
+			.setName("OpenAI base URL")
+			.setDesc(
+				"Must be https:// (http:// only allowed for localhost/127.0.0.1).",
+			)
+			.addText((text) => {
+				text
+					.setPlaceholder("https://api.openai.com/v1")
+					.setValue(this.plugin.settings.providers.openai.baseUrl)
+					.onChange(async (value) => {
+						try {
+							validateBaseUrl(value);
+						} catch (error) {
+							new Notice(
+								error instanceof Error ? error.message : String(error),
+							);
+							return;
+						}
+						this.plugin.settings.providers.openai.baseUrl = value;
+						await this.plugin.saveSettings();
+					});
+			});
 
 		new Setting(containerEl)
 			.setName("Ollama base URL")
-			.setDesc("Used when the active provider is Ollama.")
+			.setDesc(
+				"Used when the active provider is Ollama. Must be http://localhost or http://127.0.0.1 (or https://).",
+			)
 			.addText((text) => {
 				text
 					.setPlaceholder("http://localhost:11434/v1")
 					.setValue(this.plugin.settings.providers.ollama.baseUrl)
 					.onChange(async (value) => {
+						try {
+							validateBaseUrl(value);
+						} catch (error) {
+							new Notice(
+								error instanceof Error ? error.message : String(error),
+							);
+							return;
+						}
 						this.plugin.settings.providers.ollama.baseUrl = value;
 						await this.plugin.saveSettings();
 					});

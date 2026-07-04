@@ -11,6 +11,7 @@ export interface MockRequestUrlResult {
 	status?: number;
 	json?: unknown;
 	text?: string;
+	headers?: Record<string, string>;
 }
 
 export type RequestUrlHandler = (
@@ -144,7 +145,7 @@ mock.module("obsidian", () => ({
 		}
 		return {
 			status: result.status ?? 200,
-			headers: {},
+			headers: result.headers ?? {},
 			json: result.json,
 			text: result.text ?? "",
 			arrayBuffer: new ArrayBuffer(0),

