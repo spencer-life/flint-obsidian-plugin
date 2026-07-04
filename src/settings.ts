@@ -26,6 +26,9 @@ export interface FlintSettings {
 	autoTriage: boolean;
 	autoTriageIntervalMinutes: number;
 	autoTriageAutoApply: boolean;
+	imageProvider: "nim" | "openai";
+	imageModel: string;
+	imageSize: string;
 }
 
 export const DEFAULT_SETTINGS: FlintSettings = {
@@ -50,6 +53,9 @@ export const DEFAULT_SETTINGS: FlintSettings = {
 	autoTriage: false,
 	autoTriageIntervalMinutes: 60,
 	autoTriageAutoApply: false,
+	imageProvider: "nim",
+	imageModel: "stabilityai/stable-diffusion-3-medium",
+	imageSize: "1024x1024",
 };
 
 export class FlintSettingTab extends PluginSettingTab {
@@ -318,6 +324,49 @@ export class FlintSettingTab extends PluginSettingTab {
 							this.plugin.settings.autoTriageIntervalMinutes = minutes;
 							await this.plugin.saveSettings();
 						}
+					});
+			});
+
+		containerEl.createEl("h3", { text: "Content generation" });
+
+		new Setting(containerEl)
+			.setName("Image provider")
+			.setDesc("Which endpoint 'Generate image from note' calls.")
+			.addDropdown((dropdown) => {
+				dropdown
+					.addOptions({ nim: "NVIDIA NIM", openai: "OpenAI" })
+					.setValue(this.plugin.settings.imageProvider)
+					.onChange(async (value) => {
+						this.plugin.settings.imageProvider = value as "nim" | "openai";
+						await this.plugin.saveSettings();
+					});
+			});
+
+		new Setting(containerEl)
+			.setName("Image model")
+			.setDesc(
+				"For NIM, the model's API path segment (e.g. stabilityai/stable-diffusion-3-medium). For OpenAI, the model name (e.g. gpt-image-1).",
+			)
+			.addText((text) => {
+				text
+					.setPlaceholder("stabilityai/stable-diffusion-3-medium")
+					.setValue(this.plugin.settings.imageModel)
+					.onChange(async (value) => {
+						this.plugin.settings.imageModel = value;
+						await this.plugin.saveSettings();
+					});
+			});
+
+		new Setting(containerEl)
+			.setName("Image size")
+			.setDesc("e.g. 1024x1024. Mapped to an aspect ratio for NIM.")
+			.addText((text) => {
+				text
+					.setPlaceholder("1024x1024")
+					.setValue(this.plugin.settings.imageSize)
+					.onChange(async (value) => {
+						this.plugin.settings.imageSize = value;
+						await this.plugin.saveSettings();
 					});
 			});
 
