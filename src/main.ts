@@ -18,18 +18,21 @@ import {
 	type FlintSettings,
 	FlintSettingTab,
 } from "./settings";
+import { TriageService } from "./triage/triage";
 import { FlintView, VIEW_TYPE_FLINT } from "./view";
 
 export default class FlintPlugin extends Plugin {
 	settings: FlintSettings = DEFAULT_SETTINGS;
 	vaultIndex!: VaultIndex;
 	clipWatcher!: ClipWatcher;
+	triageService!: TriageService;
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
 
 		this.vaultIndex = new VaultIndex(this.app, this.settings.excludeFolders);
 		this.clipWatcher = new ClipWatcher(this);
+		this.triageService = new TriageService(this);
 
 		this.registerView(VIEW_TYPE_FLINT, (leaf) => new FlintView(leaf, this));
 
@@ -53,6 +56,14 @@ export default class FlintPlugin extends Plugin {
 			},
 		});
 
+		this.addCommand({
+			id: "triage-inbox",
+			name: "Triage inbox",
+			callback: () => {
+				void this.triageService.runManual();
+			},
+		});
+
 		this.addSettingTab(new FlintSettingTab(this.app, this));
 
 		this.app.workspace.onLayoutReady(() => {
@@ -62,6 +73,15 @@ export default class FlintPlugin extends Plugin {
 			if (this.settings.ingestEnabled) {
 				this.clipWatcher.register();
 				void this.clipWatcher.scanBacklog();
+			}
+
+			if (this.settings.autoTriage) {
+				this.registerInterval(
+					window.setInterval(
+						() => void this.triageService.runAuto(),
+						this.settings.autoTriageIntervalMinutes * 60 * 1000,
+					),
+				);
 			}
 		});
 	}

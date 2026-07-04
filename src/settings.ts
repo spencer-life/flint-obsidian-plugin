@@ -21,6 +21,11 @@ export interface FlintSettings {
 	retrievalCount: number;
 	ingestEnabled: boolean;
 	firecrawlApiKey: string;
+	inboxNotes: string[];
+	projectsFolder: string;
+	autoTriage: boolean;
+	autoTriageIntervalMinutes: number;
+	autoTriageAutoApply: boolean;
 }
 
 export const DEFAULT_SETTINGS: FlintSettings = {
@@ -40,6 +45,11 @@ export const DEFAULT_SETTINGS: FlintSettings = {
 	retrievalCount: 6,
 	ingestEnabled: true,
 	firecrawlApiKey: "",
+	inboxNotes: ["00 Start/Inbox.md", "00 Start/Ideas.md"],
+	projectsFolder: "01 Projects",
+	autoTriage: false,
+	autoTriageIntervalMinutes: 60,
+	autoTriageAutoApply: false,
 };
 
 export class FlintSettingTab extends PluginSettingTab {
@@ -247,6 +257,80 @@ export class FlintSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.streamResponses)
 					.onChange(async (value) => {
 						this.plugin.settings.streamResponses = value;
+						await this.plugin.saveSettings();
+					});
+			});
+
+		containerEl.createEl("h3", { text: "Capture triage" });
+
+		new Setting(containerEl)
+			.setName("Inbox notes")
+			.setDesc("Comma-separated vault paths to triage, in order.")
+			.addText((text) => {
+				text
+					.setPlaceholder("00 Start/Inbox.md, 00 Start/Ideas.md")
+					.setValue(this.plugin.settings.inboxNotes.join(", "))
+					.onChange(async (value) => {
+						this.plugin.settings.inboxNotes = value
+							.split(",")
+							.map((path) => path.trim())
+							.filter((path) => path.length > 0);
+						await this.plugin.saveSettings();
+					});
+			});
+
+		new Setting(containerEl)
+			.setName("Projects folder")
+			.setDesc("Vault folder scanned for project tracker notes.")
+			.addText((text) => {
+				text
+					.setPlaceholder("01 Projects")
+					.setValue(this.plugin.settings.projectsFolder)
+					.onChange(async (value) => {
+						this.plugin.settings.projectsFolder = value;
+						await this.plugin.saveSettings();
+					});
+			});
+
+		new Setting(containerEl)
+			.setName("Auto-triage")
+			.setDesc(
+				"Periodically checks the inbox and surfaces a Notice when items are ready.",
+			)
+			.addToggle((toggle) => {
+				toggle
+					.setValue(this.plugin.settings.autoTriage)
+					.onChange(async (value) => {
+						this.plugin.settings.autoTriage = value;
+						await this.plugin.saveSettings();
+					});
+			});
+
+		new Setting(containerEl)
+			.setName("Auto-triage interval (minutes)")
+			.addText((text) => {
+				text
+					.setPlaceholder("60")
+					.setValue(String(this.plugin.settings.autoTriageIntervalMinutes))
+					.onChange(async (value) => {
+						const minutes = Number.parseInt(value, 10);
+						if (Number.isFinite(minutes) && minutes > 0) {
+							this.plugin.settings.autoTriageIntervalMinutes = minutes;
+							await this.plugin.saveSettings();
+						}
+					});
+			});
+
+		new Setting(containerEl)
+			.setName("Auto-apply auto-triage")
+			.setDesc(
+				"DANGER: skips the review modal on scheduled runs and writes changes immediately. Off by default.",
+			)
+			.addToggle((toggle) => {
+				toggle
+					.setValue(this.plugin.settings.autoTriageAutoApply)
+					.onChange(async (value) => {
+						this.plugin.settings.autoTriageAutoApply = value;
 						await this.plugin.saveSettings();
 					});
 			});
