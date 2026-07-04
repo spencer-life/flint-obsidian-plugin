@@ -65,6 +65,76 @@ class FakeSetting {
 	}
 }
 
+// Minimal stand-ins for TAbstractFile/TFile so `instanceof TFile` checks in
+// src/*.ts (e.g. main.ts, ingest/watcher.ts) work against fake vault files.
+class FakeTAbstractFile {
+	path: string;
+	name: string;
+	parent: { path: string } | null;
+
+	constructor(path: string, parent: { path: string } | null = null) {
+		this.path = path;
+		this.name = path.split("/").pop() ?? path;
+		this.parent = parent;
+	}
+}
+
+export class FakeTFile extends FakeTAbstractFile {
+	basename: string;
+	extension: string;
+
+	constructor(path: string, parent: { path: string } | null = null) {
+		super(path, parent);
+		const name = this.name;
+		const dot = name.lastIndexOf(".");
+		this.basename = dot > 0 ? name.slice(0, dot) : name;
+		this.extension = dot > 0 ? name.slice(dot + 1) : "";
+	}
+}
+
+/** Simplified port of Obsidian's `normalizePath`: backslashes to slashes,
+ * collapsed repeated slashes, no trailing slash, no leading "./". */
+function fakeNormalizePath(path: string): string {
+	let result = path.replace(/\\/g, "/").replace(/\/+/g, "/");
+	if (result.startsWith("./")) result = result.slice(2);
+	if (result.length > 1 && result.endsWith("/")) result = result.slice(0, -1);
+	return result;
+}
+
+/** Debounce mock matching Obsidian's `(cb, timeout, resetTimer)` shape closely
+ * enough for tests: trailing-edge call after `timeout` ms of inactivity. */
+function fakeDebounce<T extends unknown[]>(
+	cb: (...args: T) => unknown,
+	timeout = 0,
+	resetTimer = false,
+): ((...args: T) => void) & { cancel: () => void; run: () => void } {
+	let handle: ReturnType<typeof setTimeout> | undefined;
+	let lastArgs: T | undefined;
+
+	const invoke = () => {
+		handle = undefined;
+		if (lastArgs) cb(...lastArgs);
+	};
+
+	const debounced = (...args: T) => {
+		lastArgs = args;
+		if (handle && !resetTimer) return;
+		if (handle) clearTimeout(handle);
+		handle = setTimeout(invoke, timeout);
+	};
+
+	debounced.cancel = () => {
+		if (handle) clearTimeout(handle);
+		handle = undefined;
+	};
+	debounced.run = () => {
+		if (handle) clearTimeout(handle);
+		invoke();
+	};
+
+	return debounced;
+}
+
 mock.module("obsidian", () => ({
 	requestUrl: async (params: MockRequestUrlParam) => {
 		requestUrlCalls.push(params);
@@ -82,4 +152,11 @@ mock.module("obsidian", () => ({
 	},
 	PluginSettingTab: FakePluginSettingTab,
 	Setting: FakeSetting,
+	TAbstractFile: FakeTAbstractFile,
+	TFile: FakeTFile,
+	normalizePath: fakeNormalizePath,
+	debounce: fakeDebounce,
+	Notice: class FakeNotice {
+		constructor(_message?: string) {}
+	},
 }));

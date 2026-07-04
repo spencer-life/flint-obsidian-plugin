@@ -1,5 +1,18 @@
-import { debounce, Plugin, TFile, type WorkspaceLeaf } from "obsidian";
+import {
+	debounce,
+	type Editor,
+	Notice,
+	Plugin,
+	TFile,
+	type WorkspaceLeaf,
+} from "obsidian";
 import { VaultIndex } from "./index/vault-index";
+import {
+	extractSourceUrl,
+	splitFrontmatterBlock,
+} from "./ingest/clip-processor";
+import { fetchAndConvert } from "./ingest/refetch";
+import { ClipWatcher } from "./ingest/watcher";
 import {
 	DEFAULT_SETTINGS,
 	type FlintSettings,
@@ -10,11 +23,13 @@ import { FlintView, VIEW_TYPE_FLINT } from "./view";
 export default class FlintPlugin extends Plugin {
 	settings: FlintSettings = DEFAULT_SETTINGS;
 	vaultIndex!: VaultIndex;
+	clipWatcher!: ClipWatcher;
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
 
 		this.vaultIndex = new VaultIndex(this.app, this.settings.excludeFolders);
+		this.clipWatcher = new ClipWatcher(this);
 
 		this.registerView(VIEW_TYPE_FLINT, (leaf) => new FlintView(leaf, this));
 
@@ -30,12 +45,56 @@ export default class FlintPlugin extends Plugin {
 			},
 		});
 
+		this.addCommand({
+			id: "refetch-clip-source",
+			name: "Refetch clip source",
+			editorCallback: (editor, ctx) => {
+				void this.refetchClipSource(editor, ctx.file);
+			},
+		});
+
 		this.addSettingTab(new FlintSettingTab(this.app, this));
 
 		this.app.workspace.onLayoutReady(() => {
 			void this.vaultIndex.build();
 			this.registerVaultIndexEvents();
+
+			if (this.settings.ingestEnabled) {
+				this.clipWatcher.register();
+				void this.clipWatcher.scanBacklog();
+			}
 		});
+	}
+
+	/** "Refetch clip source" command: re-fetches the active note's `source`
+	 * URL and replaces the body below frontmatter. On-demand only — never
+	 * triggered automatically. */
+	private async refetchClipSource(
+		editor: Editor,
+		file: TFile | null,
+	): Promise<void> {
+		if (!file) return;
+
+		const cache = this.app.metadataCache.getFileCache(file);
+		const sourceUrl = extractSourceUrl(cache?.frontmatter);
+		if (!sourceUrl) {
+			new Notice("Flint: this note has no `source` URL to refetch.");
+			return;
+		}
+
+		new Notice("Flint: refetching clip source...");
+		try {
+			const result = await fetchAndConvert(
+				sourceUrl,
+				this.settings.firecrawlApiKey || undefined,
+			);
+			const { frontmatterBlock } = splitFrontmatterBlock(editor.getValue());
+			editor.setValue(`${frontmatterBlock}${result.markdown}\n`);
+			new Notice(`Flint: refetched via ${result.via}.`);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			new Notice(`Flint: refetch failed — ${message}`);
+		}
 	}
 
 	/**

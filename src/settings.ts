@@ -19,6 +19,8 @@ export interface FlintSettings {
 	clippingsFolder: string;
 	streamResponses: boolean;
 	retrievalCount: number;
+	ingestEnabled: boolean;
+	firecrawlApiKey: string;
 }
 
 export const DEFAULT_SETTINGS: FlintSettings = {
@@ -36,6 +38,8 @@ export const DEFAULT_SETTINGS: FlintSettings = {
 	clippingsFolder: "03 Clippings",
 	streamResponses: true,
 	retrievalCount: 6,
+	ingestEnabled: true,
+	firecrawlApiKey: "",
 };
 
 export class FlintSettingTab extends PluginSettingTab {
@@ -183,6 +187,51 @@ export class FlintSettingTab extends PluginSettingTab {
 							.filter((folder) => folder.length > 0);
 						await this.plugin.saveSettings();
 						await this.plugin.vaultIndex?.build();
+					});
+			});
+
+		containerEl.createEl("h3", { text: "Web clip ingest" });
+
+		new Setting(containerEl)
+			.setName("Enable clip ingest")
+			.setDesc(
+				"Tidy and stamp frontmatter on new clips landing in the clippings folder.",
+			)
+			.addToggle((toggle) => {
+				toggle
+					.setValue(this.plugin.settings.ingestEnabled)
+					.onChange(async (value) => {
+						this.plugin.settings.ingestEnabled = value;
+						await this.plugin.saveSettings();
+					});
+			});
+
+		new Setting(containerEl)
+			.setName("Clippings folder")
+			.setDesc("Vault folder watched for new web clips.")
+			.addText((text) => {
+				text
+					.setPlaceholder("03 Clippings")
+					.setValue(this.plugin.settings.clippingsFolder)
+					.onChange(async (value) => {
+						this.plugin.settings.clippingsFolder = value;
+						await this.plugin.saveSettings();
+					});
+			});
+
+		new Setting(containerEl)
+			.setName("Firecrawl API key")
+			.setDesc(
+				"Optional. Used as a fallback for 'Refetch clip source' when a direct fetch fails or returns thin content.",
+			)
+			.addText((text) => {
+				text.inputEl.type = "password";
+				text
+					.setPlaceholder("fc-...")
+					.setValue(this.plugin.settings.firecrawlApiKey)
+					.onChange(async (value) => {
+						this.plugin.settings.firecrawlApiKey = value;
+						await this.plugin.saveSettings();
 					});
 			});
 
