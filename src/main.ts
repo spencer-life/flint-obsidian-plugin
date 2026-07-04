@@ -1,4 +1,5 @@
-import { Plugin, type WorkspaceLeaf } from "obsidian";
+import { debounce, Plugin, TFile, type WorkspaceLeaf } from "obsidian";
+import { VaultIndex } from "./index/vault-index";
 import {
 	DEFAULT_SETTINGS,
 	type FlintSettings,
@@ -8,9 +9,12 @@ import { FlintView, VIEW_TYPE_FLINT } from "./view";
 
 export default class FlintPlugin extends Plugin {
 	settings: FlintSettings = DEFAULT_SETTINGS;
+	vaultIndex!: VaultIndex;
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
+
+		this.vaultIndex = new VaultIndex(this.app, this.settings.excludeFolders);
 
 		this.registerView(VIEW_TYPE_FLINT, (leaf) => new FlintView(leaf, this));
 
@@ -27,6 +31,60 @@ export default class FlintPlugin extends Plugin {
 		});
 
 		this.addSettingTab(new FlintSettingTab(this.app, this));
+
+		this.app.workspace.onLayoutReady(() => {
+			void this.vaultIndex.build();
+			this.registerVaultIndexEvents();
+		});
+	}
+
+	/**
+	 * Keeps the vault index fresh as notes change. Batches changed paths and
+	 * flushes them through a single debounced pass so rapid successive edits
+	 * (e.g. a sync pulling many files) don't trigger a re-index per file.
+	 */
+	private registerVaultIndexEvents(): void {
+		const pendingPaths = new Set<string>();
+
+		const flush = debounce(
+			() => {
+				const paths = Array.from(pendingPaths);
+				pendingPaths.clear();
+				for (const path of paths) {
+					const file = this.app.vault.getAbstractFileByPath(path);
+					if (file instanceof TFile && file.extension === "md") {
+						void this.vaultIndex.indexFile(file);
+					} else {
+						this.vaultIndex.removePath(path);
+					}
+				}
+			},
+			1500,
+			true,
+		);
+
+		const schedule = (path: string) => {
+			pendingPaths.add(path);
+			flush();
+		};
+
+		this.registerEvent(
+			this.app.vault.on("create", (file) => schedule(file.path)),
+		);
+		this.registerEvent(
+			this.app.vault.on("modify", (file) => schedule(file.path)),
+		);
+		this.registerEvent(
+			this.app.vault.on("delete", (file) =>
+				this.vaultIndex.removePath(file.path),
+			),
+		);
+		this.registerEvent(
+			this.app.vault.on("rename", (file, oldPath) => {
+				this.vaultIndex.removePath(oldPath);
+				schedule(file.path);
+			}),
+		);
 	}
 
 	onunload(): void {
@@ -60,5 +118,6 @@ export default class FlintPlugin extends Plugin {
 
 	async saveSettings(): Promise<void> {
 		await this.saveData(this.settings);
+		this.vaultIndex?.setExcludeFolders(this.settings.excludeFolders);
 	}
 }

@@ -1,0 +1,129 @@
+.flint-view {
+	height: 100%;
+	padding: 0;
+}
+
+.flint-panel {
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	padding: var(--size-4-2);
+	gap: var(--size-4-2);
+}
+
+.flint-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--size-4-2);
+	flex-wrap: wrap;
+}
+
+.flint-title {
+	font-weight: 600;
+}
+
+.flint-controls {
+	display: flex;
+	gap: var(--size-4-1);
+	flex-wrap: wrap;
+}
+
+.flint-model-input {
+	min-width: 8rem;
+}
+
+.flint-test-status {
+	font-size: var(--font-ui-smaller);
+	padding: var(--size-4-1) var(--size-4-2);
+	border-radius: var(--radius-s);
+}
+
+.flint-test-ok {
+	color: var(--text-success);
+}
+
+.flint-test-error {
+	color: var(--text-error);
+}
+
+.flint-messages {
+	flex: 1;
+	overflow-y: auto;
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-4-3);
+	padding: var(--size-4-1);
+}
+
+.flint-empty {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	text-align: center;
+	margin-top: var(--size-4-4);
+}
+
+.flint-message {
+	padding: var(--size-4-2);
+	border-radius: var(--radius-m);
+	max-width: 100%;
+}
+
+.flint-message-user {
+	background: var(--background-secondary);
+	align-self: flex-end;
+}
+
+.flint-message-assistant {
+	background: var(--background-primary-alt);
+	align-self: flex-start;
+	width: 100%;
+}
+
+.flint-message-error {
+	border: 1px solid var(--text-error);
+}
+
+.flint-user-text {
+	white-space: pre-wrap;
+}
+
+.flint-markdown p:first-child {
+	margin-top: 0;
+}
+
+.flint-markdown p:last-child {
+	margin-bottom: 0;
+}
+
+.flint-citations {
+	margin-top: var(--size-4-2);
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-4-1);
+	font-size: var(--font-ui-smaller);
+	border-top: 1px solid var(--background-modifier-border);
+	padding-top: var(--size-4-1);
+}
+
+.flint-citation {
+	color: var(--text-accent);
+}
+
+.flint-error {
+	color: var(--text-error);
+	font-size: var(--font-ui-smaller);
+}
+
+.flint-input-row {
+	display: flex;
+	gap: var(--size-4-2);
+	align-items: flex-end;
+}
+
+.flint-input {
+	flex: 1;
+	resize: none;
+	min-height: 2.5rem;
+	max-height: 8rem;
+}

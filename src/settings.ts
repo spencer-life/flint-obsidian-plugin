@@ -17,6 +17,8 @@ export interface FlintSettings {
 	useEmbeddings: boolean;
 	excludeFolders: string[];
 	clippingsFolder: string;
+	streamResponses: boolean;
+	retrievalCount: number;
 }
 
 export const DEFAULT_SETTINGS: FlintSettings = {
@@ -32,6 +34,8 @@ export const DEFAULT_SETTINGS: FlintSettings = {
 	useEmbeddings: true,
 	excludeFolders: ["04 Dev Docs"],
 	clippingsFolder: "03 Clippings",
+	streamResponses: true,
+	retrievalCount: 6,
 };
 
 export class FlintSettingTab extends PluginSettingTab {
@@ -177,6 +181,23 @@ export class FlintSettingTab extends PluginSettingTab {
 							.split(",")
 							.map((folder) => folder.trim())
 							.filter((folder) => folder.length > 0);
+						await this.plugin.saveSettings();
+						await this.plugin.vaultIndex?.build();
+					});
+			});
+
+		containerEl.createEl("h3", { text: "Chat" });
+
+		new Setting(containerEl)
+			.setName("Stream responses")
+			.setDesc(
+				"Show tokens as they arrive where the provider supports it. Falls back to a full response otherwise.",
+			)
+			.addToggle((toggle) => {
+				toggle
+					.setValue(this.plugin.settings.streamResponses)
+					.onChange(async (value) => {
+						this.plugin.settings.streamResponses = value;
 						await this.plugin.saveSettings();
 					});
 			});
