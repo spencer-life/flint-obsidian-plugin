@@ -71,9 +71,42 @@ export class OpenAICompatibleProvider implements Provider {
 				messages,
 				max_tokens: opts.maxTokens,
 			}),
+			throw: false,
 		});
 
-		return response.json.choices[0].message.content;
+		const data = response.json as
+			| {
+					choices?: {
+						message?: { content?: string; reasoning_content?: string };
+					}[];
+					error?: { message?: string };
+					detail?: string;
+					message?: string;
+			  }
+			| undefined;
+
+		if (response.status >= 400) {
+			const apiMsg = data?.error?.message ?? data?.detail ?? data?.message;
+			throw new Error(
+				`Provider error (${response.status})${apiMsg ? `: ${apiMsg}` : ""}`,
+			);
+		}
+
+		const content = data?.choices?.[0]?.message?.content;
+		if (typeof content === "string" && content.length > 0) return content;
+
+		// 200 OK but no usable text — surface WHY instead of crashing on undefined.
+		if (data?.choices?.[0]?.message?.reasoning_content) {
+			throw new Error(
+				`Model "${opts.model}" returned only reasoning tokens and no answer text — try a standard chat model (e.g. meta/llama-3.3-70b-instruct).`,
+			);
+		}
+		if (!data?.choices?.length) {
+			throw new Error(
+				`Model "${opts.model}" returned no choices. It may be a non-chat (vision/image) model or incompatible with the chat endpoint.`,
+			);
+		}
+		throw new Error(`Model "${opts.model}" returned an empty response.`);
 	}
 
 	async streamChat(

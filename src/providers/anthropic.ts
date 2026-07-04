@@ -71,9 +71,28 @@ export class AnthropicProvider implements Provider {
 				"content-type": "application/json",
 			},
 			body: JSON.stringify(this.buildBody(messages, opts, false)),
+			throw: false,
 		});
 
-		return response.json.content[0].text;
+		const data = response.json as
+			| {
+					content?: { text?: string }[];
+					error?: { message?: string };
+			  }
+			| undefined;
+
+		if (response.status >= 400) {
+			const apiMsg = data?.error?.message;
+			throw new Error(
+				`Provider error (${response.status})${apiMsg ? `: ${apiMsg}` : ""}`,
+			);
+		}
+
+		const text = data?.content?.[0]?.text;
+		if (typeof text === "string") return text;
+		throw new Error(
+			`Model "${opts.model}" returned an unexpected response shape.`,
+		);
 	}
 
 	async streamChat(
