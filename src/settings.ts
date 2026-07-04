@@ -43,7 +43,7 @@ export const DEFAULT_SETTINGS: FlintSettings = {
 	activeModel: "",
 	ambition: "ambitious",
 	useEmbeddings: true,
-	excludeFolders: ["04 Dev Docs"],
+	excludeFolders: ["04 Dev Docs", "02 Claude/Config"],
 	clippingsFolder: "03 Clippings",
 	streamResponses: true,
 	retrievalCount: 6,
