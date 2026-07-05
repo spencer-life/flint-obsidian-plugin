@@ -2,6 +2,7 @@ import { type App, Notice, PluginSettingTab, Setting } from "obsidian";
 import type FlintPlugin from "./main";
 import { fetchModels } from "./providers";
 import { validateBaseUrl } from "./providers/openai-compatible";
+import { ModelSuggest } from "./ui/model-suggest";
 
 export type ProviderId = "anthropic" | "nim" | "openai" | "ollama";
 export type Ambition = "lean" | "balanced" | "ambitious";
@@ -201,16 +202,22 @@ export class FlintSettingTab extends PluginSettingTab {
 					});
 			});
 
-		const modelListId = "flint-model-datalist";
-		let modelDatalist: HTMLDataListElement | undefined;
+		let currentModelOptions: string[] = [];
 
 		const modelSetting = new Setting(containerEl)
 			.setName("Active model")
 			.setDesc("Model identifier sent to the active provider.")
 			.addText((text) => {
-				text.inputEl.setAttribute("list", modelListId);
-				modelDatalist = containerEl.createEl("datalist");
-				modelDatalist.id = modelListId;
+				new ModelSuggest(
+					this.app,
+					text.inputEl,
+					() => currentModelOptions,
+					(value) => {
+						text.setValue(value);
+						this.plugin.settings.activeModel = value;
+						void this.plugin.saveSettings();
+					},
+				);
 
 				text
 					.setPlaceholder("claude-sonnet-4-5")
@@ -226,14 +233,11 @@ export class FlintSettingTab extends PluginSettingTab {
 				force,
 			})
 				.then((models) => {
-					modelDatalist?.empty();
-					for (const id of models) {
-						modelDatalist?.createEl("option", { value: id });
-					}
+					currentModelOptions = models;
 					modelSetting.setDesc("Model identifier sent to the active provider.");
 				})
 				.catch(() => {
-					modelDatalist?.empty();
+					currentModelOptions = [];
 					modelSetting.setDesc(
 						"Model identifier sent to the active provider. Couldn't load the model list — enter it manually.",
 					);

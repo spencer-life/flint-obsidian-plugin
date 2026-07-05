@@ -1,9 +1,10 @@
 import { Component, MarkdownRenderer } from "obsidian";
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { neutralizeRemoteImageMarkdown, runPipeline } from "../chat/pipeline";
 import { fetchModels, getProvider } from "../providers";
 import type { ChatMessage } from "../providers/types";
 import type { ProviderId } from "../settings";
+import { ModelSuggest } from "../ui/model-suggest";
 import { useApp, usePlugin } from "./context";
 
 // Protocol-relative (`//host/...`) or absolute http(s) URL.
@@ -124,6 +125,7 @@ function Citations({ paths }: { paths: string[] }) {
 }
 
 export function FlintPanel() {
+	const app = useApp();
 	const plugin = usePlugin();
 
 	const [provider, setProvider] = useState<ProviderId>(
@@ -135,7 +137,6 @@ export function FlintPanel() {
 		"loading",
 	);
 	const [modelError, setModelError] = useState("");
-	const modelListId = useId();
 	const [messages, setMessages] = useState<FlintMessage[]>([]);
 	const [input, setInput] = useState("");
 	const [isSending, setIsSending] = useState(false);
@@ -147,11 +148,18 @@ export function FlintPanel() {
 
 	const abortRef = useRef<AbortController | null>(null);
 	const listRef = useRef<HTMLDivElement>(null);
+	const modelInputRef = useRef<HTMLInputElement>(null);
+	const modelOptionsRef = useRef<string[]>(modelOptions);
+	const modelSuggestRef = useRef<ModelSuggest | null>(null);
 
 	useEffect(() => {
 		const el = listRef.current;
 		if (el) el.scrollTop = el.scrollHeight;
 	}, [messages]);
+
+	useEffect(() => {
+		modelOptionsRef.current = modelOptions;
+	}, [modelOptions]);
 
 	const updateProvider = useCallback(
 		(value: ProviderId) => {
@@ -188,6 +196,21 @@ export function FlintPanel() {
 		},
 		[provider, plugin],
 	);
+
+	useEffect(() => {
+		const inputEl = modelInputRef.current;
+		// Guard against double-attach across StrictMode's dev-only double
+		// effect invocation — AbstractInputSuggest has no destroy(), so once
+		// attached to an input element we leave it alone for the panel's
+		// lifetime rather than tearing down and recreating listeners.
+		if (!inputEl || modelSuggestRef.current) return;
+		modelSuggestRef.current = new ModelSuggest(
+			app,
+			inputEl,
+			() => modelOptionsRef.current,
+			(value) => updateModel(value),
+		);
+	}, [app, updateModel]);
 
 	useEffect(() => {
 		let cancelled = false;
@@ -334,21 +357,13 @@ export function FlintPanel() {
 						<option value="ollama">Ollama</option>
 					</select>
 					<input
+						ref={modelInputRef}
 						className="flint-model-input"
 						type="text"
-						list={modelListId}
 						placeholder="model id"
 						value={model}
 						onChange={(event) => updateModel(event.target.value)}
 					/>
-					<datalist id={modelListId}>
-						{(model && !modelOptions.includes(model)
-							? [model, ...modelOptions]
-							: modelOptions
-						).map((id) => (
-							<option key={id} value={id} />
-						))}
-					</datalist>
 					<button
 						type="button"
 						className="flint-refresh-btn"

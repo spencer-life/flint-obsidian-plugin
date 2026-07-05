@@ -66,6 +66,39 @@ class FakeSetting {
 	}
 }
 
+// Minimal stand-in for `AbstractInputSuggest` so `src/ui/model-suggest.ts`
+// (imported transitively via `settings.ts`) evaluates without error. None of
+// its behavior is exercised at the unit-test level — that's UI interaction
+// against a real DOM/Obsidian popover.
+class FakeAbstractInputSuggest<T> {
+	limit = 100;
+	app: unknown;
+	textInputEl: unknown;
+	private selectCallback:
+		| ((value: T, evt: MouseEvent | KeyboardEvent) => unknown)
+		| undefined;
+
+	constructor(app: unknown, textInputEl: unknown) {
+		this.app = app;
+		this.textInputEl = textInputEl;
+	}
+	setValue(_value: string) {}
+	getValue(): string {
+		return "";
+	}
+	open() {}
+	close() {}
+	onSelect(
+		callback: (value: T, evt: MouseEvent | KeyboardEvent) => unknown,
+	): this {
+		this.selectCallback = callback;
+		return this;
+	}
+	selectSuggestion(value: T, evt: MouseEvent | KeyboardEvent) {
+		this.selectCallback?.(value, evt);
+	}
+}
+
 // Minimal stand-ins for TAbstractFile/TFile so `instanceof TFile` checks in
 // src/*.ts (e.g. main.ts, ingest/watcher.ts) work against fake vault files.
 class FakeTAbstractFile {
@@ -153,6 +186,7 @@ mock.module("obsidian", () => ({
 	},
 	PluginSettingTab: FakePluginSettingTab,
 	Setting: FakeSetting,
+	AbstractInputSuggest: FakeAbstractInputSuggest,
 	TAbstractFile: FakeTAbstractFile,
 	TFile: FakeTFile,
 	normalizePath: fakeNormalizePath,
