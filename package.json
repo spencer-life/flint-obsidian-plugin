@@ -20,7 +20,7 @@
 		"@types/turndown": "^5",
 		"esbuild": "0.25.5",
 		"jsdom": "^29.1.1",
-		"obsidian": "latest",
+		"obsidian": "^1.13.1",
 		"typescript": "^5.8.3"
 	},
 	"dependencies": {
