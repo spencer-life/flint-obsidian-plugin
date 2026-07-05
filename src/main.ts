@@ -36,6 +36,7 @@ import {
 	DEFAULT_SETTINGS,
 	type FlintSettings,
 	FlintSettingTab,
+	resolveTaskModel,
 } from "./settings";
 import { OrganizeService } from "./triage/organize";
 import { TriageService } from "./triage/triage";
@@ -265,7 +266,7 @@ export default class FlintPlugin extends Plugin {
 		const provider = getProvider(this.settings);
 		const reply = await provider.chat(
 			buildHtmlPagePrompt(file.basename, content),
-			{ model: this.settings.activeModel },
+			{ model: resolveTaskModel(this.settings, "htmlGenerate") },
 		);
 		return sanitizeHtmlDocument(stripReplyFences(reply));
 	}

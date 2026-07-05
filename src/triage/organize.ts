@@ -11,6 +11,7 @@ import { nextAvailablePath } from "../generate/html";
 import { isWithinFolder } from "../ingest/clip-processor";
 import type FlintPlugin from "../main";
 import { getProvider } from "../providers";
+import { resolveTaskModel } from "../settings";
 import {
 	type OrganizeSuggestion,
 	parseOrganizeResponse,
@@ -177,7 +178,7 @@ export class OrganizeService {
 		try {
 			const provider = getProvider(this.plugin.settings);
 			const raw = await provider.chat(messages, {
-				model: this.plugin.settings.activeModel,
+				model: resolveTaskModel(this.plugin.settings, "organize"),
 			});
 			suggestion = parseOrganizeResponse(raw, allowlist);
 		} catch {

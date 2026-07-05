@@ -10,6 +10,7 @@ import { neutralizeRemoteImageMarkdown } from "../chat/pipeline";
 import type FlintPlugin from "../main";
 import { getProvider } from "../providers";
 import type { ChatMessage } from "../providers/types";
+import { resolveTaskModel } from "../settings";
 import {
 	buildDailyNote,
 	type DashboardData,
@@ -119,7 +120,7 @@ export class DailyDashboardService {
 
 			const provider = getProvider(this.plugin.settings);
 			const raw = await provider.chat(buildSummaryPrompt(excerpts), {
-				model: this.plugin.settings.activeModel,
+				model: resolveTaskModel(this.plugin.settings, "dashboard"),
 			});
 			return neutralizeRemoteImageMarkdown(raw.trim());
 		} catch {

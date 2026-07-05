@@ -41,6 +41,28 @@ export interface FlintSettings {
 	imageProvider: "nim" | "openai";
 	imageModel: string;
 	imageSize: string;
+	taskModels: {
+		triage: string;
+		organize: string;
+		dashboard: string;
+		htmlGenerate: string;
+	};
+}
+
+/** The per-task model tasks `resolveTaskModel` knows how to look up. */
+export type TaskModelKey = keyof FlintSettings["taskModels"];
+
+/**
+ * Per-task model override, falling back to the chat `activeModel` when the
+ * task's override is empty or whitespace-only — the default, no-behavior-
+ * change state until a user explicitly assigns one.
+ */
+export function resolveTaskModel(
+	settings: FlintSettings,
+	task: TaskModelKey,
+): string {
+	const override = settings.taskModels[task];
+	return override.trim().length > 0 ? override : settings.activeModel;
 }
 
 export const DEFAULT_SETTINGS: FlintSettings = {
@@ -76,6 +98,12 @@ export const DEFAULT_SETTINGS: FlintSettings = {
 	imageProvider: "nim",
 	imageModel: "stabilityai/stable-diffusion-3-medium",
 	imageSize: "1024x1024",
+	taskModels: {
+		triage: "",
+		organize: "",
+		dashboard: "",
+		htmlGenerate: "",
+	},
 };
 
 export class FlintSettingTab extends PluginSettingTab {
@@ -252,6 +280,63 @@ export class FlintSettingTab extends PluginSettingTab {
 				.setTooltip("Refetch model list")
 				.onClick(() => populateModelList(true));
 		});
+
+		containerEl.createEl("h3", { text: "Task models" });
+		containerEl.createEl("p", {
+			text: "Optional per-task overrides. Leave empty to use the active model above. Model ids below apply to the currently active provider.",
+			cls: "setting-item-description",
+		});
+
+		const addTaskModelSetting = (
+			name: string,
+			desc: string,
+			task: TaskModelKey,
+		) => {
+			new Setting(containerEl)
+				.setName(name)
+				.setDesc(desc)
+				.addText((text) => {
+					new ModelSuggest(
+						this.app,
+						text.inputEl,
+						() => currentModelOptions,
+						(value) => {
+							text.setValue(value);
+							this.plugin.settings.taskModels[task] = value;
+							void this.plugin.saveSettings();
+						},
+					);
+
+					text
+						.setPlaceholder("same as chat")
+						.setValue(this.plugin.settings.taskModels[task])
+						.onChange(async (value) => {
+							this.plugin.settings.taskModels[task] = value;
+							await this.plugin.saveSettings();
+						});
+				});
+		};
+
+		addTaskModelSetting(
+			"Triage model",
+			"Suggested: deepseek-ai/deepseek-v4-flash (fast, strong JSON/instruction following)",
+			"triage",
+		);
+		addTaskModelSetting(
+			"Auto-organize model",
+			"Suggested: deepseek-ai/deepseek-v4-flash (fast, strong JSON/instruction following)",
+			"organize",
+		);
+		addTaskModelSetting(
+			"Daily dashboard model",
+			"Suggested: google/gemma-3-12b-it (clean prose)",
+			"dashboard",
+		);
+		addTaskModelSetting(
+			"HTML generation model",
+			"Leave empty to use the chat model (best quality)",
+			"htmlGenerate",
+		);
 
 		containerEl.createEl("h3", { text: "Vault indexing" });
 

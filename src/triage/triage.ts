@@ -1,6 +1,7 @@
 import { Modal, Notice, normalizePath, TFile } from "obsidian";
 import type FlintPlugin from "../main";
 import { getProvider } from "../providers";
+import { resolveTaskModel } from "../settings";
 import { appendUnderHeading, NEXT_STEPS_HEADING, removeBullets } from "./apply";
 import {
 	extractBullets,
@@ -111,7 +112,7 @@ export class TriageService {
 
 		const provider = getProvider(this.plugin.settings);
 		const raw = await provider.chat(messages, {
-			model: this.plugin.settings.activeModel,
+			model: resolveTaskModel(this.plugin.settings, "triage"),
 		});
 
 		let classifications: TriageClassification[];

@@ -26,6 +26,7 @@ export function createFakeApp(files: FakeFile[]): App {
 	const vault = {
 		getMarkdownFiles: () => Array.from(tFiles.values()),
 		getAbstractFileByPath: (path: string) => tFiles.get(path) ?? null,
+		getFileByPath: (path: string) => tFiles.get(path) ?? null,
 		cachedRead: async (file: TFile) => {
 			const found = byPath.get(file.path);
 			if (!found) throw new Error(`Unknown fake file: ${file.path}`);

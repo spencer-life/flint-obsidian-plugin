@@ -169,6 +169,41 @@ function fakeDebounce<T extends unknown[]>(
 	return debounced;
 }
 
+// Chainable no-op DOM node stand-in shared by `contentEl.createEl(...)` /
+// `.createDiv(...)` calls in modal `onOpen()` bodies below.
+interface FakeDomNode {
+	createEl: (..._args: unknown[]) => FakeDomNode;
+	createSpan: (..._args: unknown[]) => FakeDomNode;
+	createDiv: (..._args: unknown[]) => FakeDomNode;
+	addEventListener: (..._args: unknown[]) => void;
+}
+
+function fakeDomNode(): FakeDomNode {
+	const node: FakeDomNode = {
+		createEl: () => fakeDomNode(),
+		createSpan: () => fakeDomNode(),
+		createDiv: () => fakeDomNode(),
+		addEventListener: () => undefined,
+	};
+	return node;
+}
+
+// Minimal stand-in for `Modal` so files that define review/confirm modals
+// (triage.ts, organize.ts, daily.ts) evaluate without error at import time.
+// None of its behavior is exercised at the unit-test level.
+class FakeModal {
+	app: unknown;
+	contentEl: FakeDomNode & { empty: () => void };
+
+	constructor(app: unknown) {
+		this.app = app;
+		this.contentEl = { ...fakeDomNode(), empty: () => undefined };
+	}
+
+	open() {}
+	close() {}
+}
+
 mock.module("obsidian", () => ({
 	requestUrl: async (params: MockRequestUrlParam) => {
 		requestUrlCalls.push(params);
@@ -185,6 +220,7 @@ mock.module("obsidian", () => ({
 		};
 	},
 	PluginSettingTab: FakePluginSettingTab,
+	Modal: FakeModal,
 	Setting: FakeSetting,
 	AbstractInputSuggest: FakeAbstractInputSuggest,
 	TAbstractFile: FakeTAbstractFile,
