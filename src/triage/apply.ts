@@ -5,13 +5,55 @@
  * stays unit-testable without the Obsidian runtime.
  */
 
-export const NEXT_STEPS_HEADING = "## 👉 Next small steps";
+// The vault's 18 project trackers actually use the plain heading below (no
+// emoji) — this is the canonical heading `appendUnderHeading` creates when a
+// tracker has neither variant yet. An emoji-prefixed variant is still matched
+// (and preferred) when it's the one already present in the file, so existing
+// trackers using it aren't duplicated.
+export const NEXT_STEPS_HEADING = "## Next small steps";
+
+const HEADING_LINE_PATTERN = /^(#{1,6})\s*(.*)$/;
+
+function parseHeadingLine(
+	line: string,
+): { level: string; text: string } | null {
+	const match = line.trim().match(HEADING_LINE_PATTERN);
+	if (!match) return null;
+	return { level: match[1] ?? "", text: match[2] ?? "" };
+}
+
+/** Strips a leading emoji/symbol run (and surrounding whitespace) from a
+ * heading's text so "## 👉 Next small steps" and "## Next small steps"
+ * normalize to the same key. */
+function normalizeHeadingText(text: string): string {
+	return text
+		.replace(/^[^\p{L}\p{N}]+/u, "")
+		.trim()
+		.toLowerCase();
+}
+
+/** True when `line` is a heading matching `heading`'s level and text, modulo
+ * a leading emoji/symbol difference (e.g. "## 👉 Next small steps" vs.
+ * "## Next small steps"). */
+function isMatchingHeading(line: string, heading: string): boolean {
+	const parsedLine = parseHeadingLine(line);
+	const parsedHeading = parseHeadingLine(heading);
+	if (!parsedLine || !parsedHeading) return false;
+	return (
+		parsedLine.level === parsedHeading.level &&
+		normalizeHeadingText(parsedLine.text) ===
+			normalizeHeadingText(parsedHeading.text)
+	);
+}
 
 /**
- * Appends `lines` as list items under `heading` in `content`. If the heading
- * already exists, the lines are inserted at the end of that section (right
- * before the next heading, or at EOF if it's the last section). If the
- * heading is missing, it's created (with a blank-line separator) at EOF.
+ * Appends `lines` as list items under `heading` in `content`. Matches either
+ * the plain or emoji-prefixed heading variant, preferring whichever one is
+ * already present in the file. If the heading already exists, the lines are
+ * inserted at the end of that section (right before the next heading, or at
+ * EOF if it's the last section). If neither variant is present, `heading`
+ * (the plain form, when called with `NEXT_STEPS_HEADING`) is created (with a
+ * blank-line separator) at EOF.
  */
 export function appendUnderHeading(
 	content: string,
@@ -21,7 +63,9 @@ export function appendUnderHeading(
 	if (lines.length === 0) return content;
 
 	const bodyLines = content.split(/\r?\n/);
-	const headingIndex = bodyLines.findIndex((line) => line.trim() === heading);
+	const headingIndex = bodyLines.findIndex((line) =>
+		isMatchingHeading(line, heading),
+	);
 
 	if (headingIndex === -1) {
 		const trimmedContent = content.replace(/\s+$/, "");

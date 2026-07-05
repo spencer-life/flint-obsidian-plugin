@@ -6,11 +6,11 @@ import {
 } from "../src/triage/apply";
 
 describe("appendUnderHeading", () => {
-	test("appends under an existing heading mid-file, before the next heading", () => {
+	test("appends under the plain heading (the vault trackers' real heading) mid-file", () => {
 		const content = [
 			"# Project",
 			"",
-			"## 👉 Next small steps",
+			"## Next small steps",
 			"- [ ] existing task",
 			"",
 			"## Notes",
@@ -22,7 +22,7 @@ describe("appendUnderHeading", () => {
 		]);
 
 		const lines = result.split("\n");
-		const headingIdx = lines.indexOf(NEXT_STEPS_HEADING);
+		const headingIdx = lines.indexOf("## Next small steps");
 		const notesIdx = lines.indexOf("## Notes");
 
 		expect(headingIdx).toBeGreaterThanOrEqual(0);
@@ -38,6 +38,52 @@ describe("appendUnderHeading", () => {
 
 		// The Notes section content is preserved untouched.
 		expect(result).toContain("Some notes here.");
+
+		// No duplicate heading was created.
+		expect(result.match(/^#{1,6}.*next small steps/gim)?.length).toBe(1);
+	});
+
+	test("still matches the emoji-prefixed variant when that's the one already in the file", () => {
+		const content = [
+			"# Project",
+			"",
+			"## 👉 Next small steps",
+			"- [ ] existing task",
+			"",
+			"## Notes",
+			"Some notes here.",
+		].join("\n");
+
+		const result = appendUnderHeading(content, NEXT_STEPS_HEADING, [
+			"- [ ] new task (from: capture)",
+		]);
+
+		const lines = result.split("\n");
+		const headingIdx = lines.indexOf("## 👉 Next small steps");
+		const notesIdx = lines.indexOf("## Notes");
+
+		expect(headingIdx).toBeGreaterThanOrEqual(0);
+		expect(notesIdx).toBeGreaterThan(headingIdx);
+		expect(result).toContain("- [ ] existing task");
+		expect(result).toContain("- [ ] new task (from: capture)");
+		// The existing emoji heading is reused, not duplicated as a plain one.
+		expect(result.match(/^#{1,6}.*next small steps/gim)?.length).toBe(1);
+	});
+
+	test("matches even when the caller passes the emoji heading and the file has the plain one", () => {
+		const content = [
+			"# Project",
+			"",
+			"## Next small steps",
+			"- [ ] existing task",
+		].join("\n");
+
+		const result = appendUnderHeading(content, "## 👉 Next small steps", [
+			"- [ ] new task",
+		]);
+
+		expect(result).toContain("- [ ] existing task\n- [ ] new task");
+		expect(result.match(/^#{1,6}.*next small steps/gim)?.length).toBe(1);
 	});
 
 	test("appends to the heading's section when it's the last section (EOF)", () => {
@@ -55,7 +101,7 @@ describe("appendUnderHeading", () => {
 		expect(result).toContain("- [ ] existing\n- [ ] new one");
 	});
 
-	test("creates the heading at EOF when it's missing", () => {
+	test("creates the plain heading at EOF when it's missing", () => {
 		const content = "# Project\n\nSome existing body text.";
 
 		const result = appendUnderHeading(content, NEXT_STEPS_HEADING, [

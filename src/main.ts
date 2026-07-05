@@ -36,6 +36,7 @@ import {
 	type FlintSettings,
 	FlintSettingTab,
 } from "./settings";
+import { OrganizeService } from "./triage/organize";
 import { TriageService } from "./triage/triage";
 import { FlintView, VIEW_TYPE_FLINT } from "./view";
 
@@ -44,6 +45,7 @@ export default class FlintPlugin extends Plugin {
 	vaultIndex!: VaultIndex;
 	clipWatcher!: ClipWatcher;
 	triageService!: TriageService;
+	organizeService!: OrganizeService;
 
 	private persistEmbeddingsDebounced = debounce(
 		() => {
@@ -63,6 +65,7 @@ export default class FlintPlugin extends Plugin {
 		);
 		this.clipWatcher = new ClipWatcher(this);
 		this.triageService = new TriageService(this);
+		this.organizeService = new OrganizeService(this);
 
 		this.registerView(VIEW_TYPE_FLINT, (leaf) => new FlintView(leaf, this));
 
@@ -118,6 +121,23 @@ export default class FlintPlugin extends Plugin {
 			},
 		});
 
+		this.addCommand({
+			id: "apply-organize-suggestions",
+			name: "Apply organize suggestions",
+			editorCallback: (_editor, ctx) => {
+				if (!ctx.file) return;
+				void this.organizeService.runManualApply(ctx.file);
+			},
+		});
+
+		this.addCommand({
+			id: "review-organize-suggestions",
+			name: "Review organize suggestions",
+			callback: () => {
+				void this.organizeService.runBulkReview();
+			},
+		});
+
 		this.addSettingTab(new FlintSettingTab(this.app, this));
 
 		this.app.workspace.onLayoutReady(() => {
@@ -131,6 +151,11 @@ export default class FlintPlugin extends Plugin {
 			if (this.settings.ingestEnabled) {
 				this.clipWatcher.register();
 				void this.clipWatcher.scanBacklog();
+			}
+
+			if (this.settings.organizeEnabled) {
+				this.organizeService.register();
+				void this.organizeService.scanBacklog();
 			}
 
 			if (this.settings.autoTriage) {

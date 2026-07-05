@@ -32,6 +32,9 @@ export interface FlintSettings {
 	autoTriage: boolean;
 	autoTriageIntervalMinutes: number;
 	autoTriageAutoApply: boolean;
+	captureFolder: string;
+	organizeEnabled: boolean;
+	organizeAutoApply: boolean;
 	imageProvider: "nim" | "openai";
 	imageModel: string;
 	imageSize: string;
@@ -62,6 +65,9 @@ export const DEFAULT_SETTINGS: FlintSettings = {
 	autoTriage: false,
 	autoTriageIntervalMinutes: 60,
 	autoTriageAutoApply: false,
+	captureFolder: "00 Start/Inbox",
+	organizeEnabled: false,
+	organizeAutoApply: false,
 	imageProvider: "nim",
 	imageModel: "stabilityai/stable-diffusion-3-medium",
 	imageSize: "1024x1024",
@@ -543,6 +549,51 @@ export class FlintSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.autoTriageAutoApply)
 					.onChange(async (value) => {
 						this.plugin.settings.autoTriageAutoApply = value;
+						await this.plugin.saveSettings();
+					});
+			});
+
+		containerEl.createEl("h3", { text: "Auto-organize captures" });
+
+		new Setting(containerEl)
+			.setName("Enable auto-organize")
+			.setDesc(
+				"Suggests a title, tags, and destination folder (as frontmatter) for new notes landing in the capture folder.",
+			)
+			.addToggle((toggle) => {
+				toggle
+					.setValue(this.plugin.settings.organizeEnabled)
+					.onChange(async (value) => {
+						this.plugin.settings.organizeEnabled = value;
+						await this.plugin.saveSettings();
+					});
+			});
+
+		new Setting(containerEl)
+			.setName("Capture folder")
+			.setDesc(
+				"Vault folder watched for new captures. Idles silently if the folder doesn't exist.",
+			)
+			.addText((text) => {
+				text
+					.setPlaceholder("00 Start/Inbox")
+					.setValue(this.plugin.settings.captureFolder)
+					.onChange(async (value) => {
+						this.plugin.settings.captureFolder = value;
+						await this.plugin.saveSettings();
+					});
+			});
+
+		new Setting(containerEl)
+			.setName("Auto-apply organize suggestions")
+			.setDesc(
+				"DANGER: renames/moves captures into the suggested destination immediately, with no review step. Off by default. Never applies on mobile.",
+			)
+			.addToggle((toggle) => {
+				toggle
+					.setValue(this.plugin.settings.organizeAutoApply)
+					.onChange(async (value) => {
+						this.plugin.settings.organizeAutoApply = value;
 						await this.plugin.saveSettings();
 					});
 			});
