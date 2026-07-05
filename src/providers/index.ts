@@ -1,3 +1,4 @@
+import { sha256Hex } from "../index/embedding-store";
 import type { FlintSettings, ProviderId } from "../settings";
 import { AnthropicProvider } from "./anthropic";
 import { NIM_BASE_URL, OpenAICompatibleProvider } from "./openai-compatible";
@@ -92,7 +93,8 @@ export async function fetchModels(
 	opts?: { force?: boolean },
 ): Promise<string[]> {
 	const config = resolveConfig(providerId, settings);
-	const key = `${providerId}|${config.baseUrl}|${config.apiKey}`;
+	// Fingerprint the key rather than holding it in plaintext in the cache Map.
+	const key = `${providerId}|${config.baseUrl}|${await sha256Hex(config.apiKey)}`;
 	const cached = modelsCache.get(key);
 
 	if (cached?.inflight) return cached.inflight;
