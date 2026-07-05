@@ -1,7 +1,7 @@
 import { Component, MarkdownRenderer } from "obsidian";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { neutralizeRemoteImageMarkdown, runPipeline } from "../chat/pipeline";
-import { getProvider } from "../providers";
+import { fetchModels, getProvider } from "../providers";
 import type { ChatMessage } from "../providers/types";
 import type { ProviderId } from "../settings";
 import { useApp, usePlugin } from "./context";
@@ -124,13 +124,18 @@ function Citations({ paths }: { paths: string[] }) {
 }
 
 export function FlintPanel() {
-	const app = useApp();
 	const plugin = usePlugin();
 
 	const [provider, setProvider] = useState<ProviderId>(
 		plugin.settings.activeProvider,
 	);
 	const [model, setModel] = useState(plugin.settings.activeModel);
+	const [modelOptions, setModelOptions] = useState<string[]>([]);
+	const [modelStatus, setModelStatus] = useState<"loading" | "ready" | "error">(
+		"loading",
+	);
+	const [modelError, setModelError] = useState("");
+	const modelListId = useId();
 	const [messages, setMessages] = useState<FlintMessage[]>([]);
 	const [input, setInput] = useState("");
 	const [isSending, setIsSending] = useState(false);
@@ -165,6 +170,46 @@ export function FlintPanel() {
 		},
 		[plugin],
 	);
+
+	const loadModels = useCallback(
+		async (force: boolean) => {
+			setModelStatus("loading");
+			setModelError("");
+			try {
+				const models = await fetchModels(provider, plugin.settings, {
+					force,
+				});
+				setModelOptions(models);
+				setModelStatus("ready");
+			} catch (err) {
+				setModelStatus("error");
+				setModelError(err instanceof Error ? err.message : String(err));
+			}
+		},
+		[provider, plugin],
+	);
+
+	useEffect(() => {
+		let cancelled = false;
+		setModelStatus("loading");
+		setModelError("");
+
+		fetchModels(provider, plugin.settings)
+			.then((models) => {
+				if (cancelled) return;
+				setModelOptions(models);
+				setModelStatus("ready");
+			})
+			.catch((err) => {
+				if (cancelled) return;
+				setModelStatus("error");
+				setModelError(err instanceof Error ? err.message : String(err));
+			});
+
+		return () => {
+			cancelled = true;
+		};
+	}, [provider, plugin]);
 
 	const handleTestConnection = useCallback(async () => {
 		setTestStatus("testing");
@@ -291,10 +336,28 @@ export function FlintPanel() {
 					<input
 						className="flint-model-input"
 						type="text"
+						list={modelListId}
 						placeholder="model id"
 						value={model}
 						onChange={(event) => updateModel(event.target.value)}
 					/>
+					<datalist id={modelListId}>
+						{(model && !modelOptions.includes(model)
+							? [model, ...modelOptions]
+							: modelOptions
+						).map((id) => (
+							<option key={id} value={id} />
+						))}
+					</datalist>
+					<button
+						type="button"
+						className="flint-refresh-btn"
+						onClick={() => void loadModels(true)}
+						disabled={modelStatus === "loading"}
+						title={modelStatus === "error" ? modelError : "Refresh model list"}
+					>
+						↻
+					</button>
 					<button
 						type="button"
 						className="flint-test-btn"
@@ -305,6 +368,12 @@ export function FlintPanel() {
 					</button>
 				</div>
 			</div>
+
+			{modelStatus === "error" && (
+				<div className="flint-test-status flint-test-error">
+					{modelError || "Couldn't load model list — using free text."}
+				</div>
+			)}
 
 			{testStatus !== "idle" && (
 				<div className={`flint-test-status flint-test-${testStatus}`}>

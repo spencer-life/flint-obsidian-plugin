@@ -1,5 +1,6 @@
 import { type App, Notice, PluginSettingTab, Setting } from "obsidian";
 import type FlintPlugin from "./main";
+import { fetchModels } from "./providers";
 import { validateBaseUrl } from "./providers/openai-compatible";
 
 export type ProviderId = "anthropic" | "nim" | "openai" | "ollama";
@@ -179,13 +180,21 @@ export class FlintSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.plugin.settings.activeProvider = value as ProviderId;
 						await this.plugin.saveSettings();
+						this.display();
 					});
 			});
 
-		new Setting(containerEl)
+		const modelListId = "flint-model-datalist";
+		let modelDatalist: HTMLDataListElement | undefined;
+
+		const modelSetting = new Setting(containerEl)
 			.setName("Active model")
 			.setDesc("Model identifier sent to the active provider.")
 			.addText((text) => {
+				text.inputEl.setAttribute("list", modelListId);
+				modelDatalist = containerEl.createEl("datalist");
+				modelDatalist.id = modelListId;
+
 				text
 					.setPlaceholder("claude-sonnet-4-5")
 					.setValue(this.plugin.settings.activeModel)
@@ -194,6 +203,34 @@ export class FlintSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					});
 			});
+
+		const populateModelList = (force: boolean) => {
+			fetchModels(this.plugin.settings.activeProvider, this.plugin.settings, {
+				force,
+			})
+				.then((models) => {
+					modelDatalist?.empty();
+					for (const id of models) {
+						modelDatalist?.createEl("option", { value: id });
+					}
+					modelSetting.setDesc("Model identifier sent to the active provider.");
+				})
+				.catch(() => {
+					modelDatalist?.empty();
+					modelSetting.setDesc(
+						"Model identifier sent to the active provider. Couldn't load the model list — enter it manually.",
+					);
+				});
+		};
+
+		populateModelList(false);
+
+		modelSetting.addExtraButton((button) => {
+			button
+				.setIcon("refresh-cw")
+				.setTooltip("Refetch model list")
+				.onClick(() => populateModelList(true));
+		});
 
 		containerEl.createEl("h3", { text: "Vault indexing" });
 

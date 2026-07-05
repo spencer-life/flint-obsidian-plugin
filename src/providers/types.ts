@@ -27,4 +27,6 @@ export interface Provider {
 		opts: ChatOptions,
 		onToken: TokenHandler,
 	): Promise<string>;
+	/** Lists model ids available to this provider's configured key, in API order. */
+	listModels(): Promise<string[]>;
 }

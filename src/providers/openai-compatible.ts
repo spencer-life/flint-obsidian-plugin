@@ -109,6 +109,42 @@ export class OpenAICompatibleProvider implements Provider {
 		throw new Error(`Model "${opts.model}" returned an empty response.`);
 	}
 
+	async listModels(): Promise<string[]> {
+		validateBaseUrl(this.config.baseUrl);
+		const response = await requestUrl({
+			url: `${this.config.baseUrl}/models`,
+			method: "GET",
+			headers: {
+				Authorization: `Bearer ${this.config.apiKey}`,
+			},
+			throw: false,
+		});
+
+		const data = response.json as
+			| {
+					data?: { id?: string }[];
+					error?: { message?: string };
+					detail?: string;
+					message?: string;
+			  }
+			| undefined;
+
+		if (response.status >= 400) {
+			const apiMsg = data?.error?.message ?? data?.detail ?? data?.message;
+			throw new Error(
+				`Provider error (${response.status})${apiMsg ? `: ${apiMsg}` : ""}`,
+			);
+		}
+
+		const ids = (data?.data ?? [])
+			.map((model) => model.id)
+			.filter((id): id is string => typeof id === "string");
+
+		return ids.sort((a, b) =>
+			a.localeCompare(b, undefined, { sensitivity: "base" }),
+		);
+	}
+
 	async streamChat(
 		messages: ChatMessage[],
 		opts: ChatOptions,

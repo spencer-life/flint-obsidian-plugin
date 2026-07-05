@@ -3,8 +3,10 @@ import { consumeSSEStream } from "./sse";
 import type { ChatMessage, ChatOptions, Provider, TokenHandler } from "./types";
 
 const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
+const ANTHROPIC_MODELS_URL = "https://api.anthropic.com/v1/models";
 const ANTHROPIC_VERSION = "2023-06-01";
 const DEFAULT_MAX_TOKENS = 4096;
+const MAX_MODEL_PAGES = 5;
 
 export interface AnthropicConfig {
 	apiKey: string;
@@ -93,6 +95,52 @@ export class AnthropicProvider implements Provider {
 		throw new Error(
 			`Model "${opts.model}" returned an unexpected response shape.`,
 		);
+	}
+
+	async listModels(): Promise<string[]> {
+		const ids: string[] = [];
+		let afterId: string | undefined;
+
+		for (let page = 0; page < MAX_MODEL_PAGES; page += 1) {
+			const url = afterId
+				? `${ANTHROPIC_MODELS_URL}?limit=1000&after_id=${encodeURIComponent(afterId)}`
+				: `${ANTHROPIC_MODELS_URL}?limit=1000`;
+
+			const response = await requestUrl({
+				url,
+				method: "GET",
+				headers: {
+					"x-api-key": this.config.apiKey,
+					"anthropic-version": ANTHROPIC_VERSION,
+				},
+				throw: false,
+			});
+
+			const data = response.json as
+				| {
+						data?: { id?: string }[];
+						has_more?: boolean;
+						last_id?: string;
+						error?: { message?: string };
+				  }
+				| undefined;
+
+			if (response.status >= 400) {
+				const apiMsg = data?.error?.message;
+				throw new Error(
+					`Provider error (${response.status})${apiMsg ? `: ${apiMsg}` : ""}`,
+				);
+			}
+
+			for (const model of data?.data ?? []) {
+				if (typeof model.id === "string") ids.push(model.id);
+			}
+
+			if (!data?.has_more || !data.last_id) break;
+			afterId = data.last_id;
+		}
+
+		return ids;
 	}
 
 	async streamChat(
