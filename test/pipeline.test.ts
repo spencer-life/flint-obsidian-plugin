@@ -21,6 +21,15 @@ function cloneSettings() {
 	return structuredClone(DEFAULT_SETTINGS);
 }
 
+// Keyword-only settings for the VaultIndex under test, so retrieve() never
+// attempts a network embedding call here (embedding behavior is covered by
+// vault-index.test.ts / embedding-store.test.ts / hybrid.test.ts).
+function indexSettings() {
+	const settings = cloneSettings();
+	settings.useEmbeddings = false;
+	return settings;
+}
+
 describe("buildSystemPrompt", () => {
 	test("cites retrieved chunk paths and includes their text", () => {
 		const prompt = buildSystemPrompt([
@@ -100,7 +109,7 @@ describe("runPipeline", () => {
 				content: "# Garden\nTomato planting schedule for spring.",
 			},
 		]);
-		const index = new VaultIndex(app, []);
+		const index = new VaultIndex(app, [], indexSettings());
 		await index.build();
 
 		setRequestUrlHandler(() => ({
@@ -133,7 +142,7 @@ describe("runPipeline", () => {
 
 	test("selects the NIM OpenAI-compatible provider when configured", async () => {
 		const app = createFakeApp([]);
-		const index = new VaultIndex(app, []);
+		const index = new VaultIndex(app, [], indexSettings());
 		await index.build();
 
 		setRequestUrlHandler(() => ({
@@ -157,7 +166,7 @@ describe("runPipeline", () => {
 
 	test("includes prior conversation history between the system prompt and the new query", async () => {
 		const app = createFakeApp([]);
-		const index = new VaultIndex(app, []);
+		const index = new VaultIndex(app, [], indexSettings());
 		await index.build();
 
 		setRequestUrlHandler(() => ({

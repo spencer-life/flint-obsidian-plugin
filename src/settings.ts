@@ -5,6 +5,7 @@ import { validateBaseUrl } from "./providers/openai-compatible";
 
 export type ProviderId = "anthropic" | "nim" | "openai" | "ollama";
 export type Ambition = "lean" | "balanced" | "ambitious";
+export type EmbeddingProviderId = "openai" | "nim" | "ollama" | "none";
 
 export interface FlintSettings {
 	providers: {
@@ -17,6 +18,9 @@ export interface FlintSettings {
 	activeModel: string;
 	ambition: Ambition;
 	useEmbeddings: boolean;
+	embeddingProvider: EmbeddingProviderId;
+	embeddingModel: string;
+	embeddingDimensions: number;
 	excludeFolders: string[];
 	clippingsFolder: string;
 	streamResponses: boolean;
@@ -44,6 +48,9 @@ export const DEFAULT_SETTINGS: FlintSettings = {
 	activeModel: "",
 	ambition: "ambitious",
 	useEmbeddings: true,
+	embeddingProvider: "openai",
+	embeddingModel: "text-embedding-3-small",
+	embeddingDimensions: 512,
 	excludeFolders: ["04 Dev Docs", "02 Claude/Config"],
 	clippingsFolder: "03 Clippings",
 	streamResponses: true,
@@ -235,9 +242,9 @@ export class FlintSettingTab extends PluginSettingTab {
 		containerEl.createEl("h3", { text: "Vault indexing" });
 
 		new Setting(containerEl)
-			.setName("Use local embeddings")
+			.setName("Use embeddings")
 			.setDesc(
-				"Falls back to a lean keyword index where embeddings are too heavy (e.g. mobile).",
+				"Master switch for semantic (meaning-based) search. Off falls back to keyword-only search everywhere.",
 			)
 			.addToggle((toggle) => {
 				toggle
@@ -246,6 +253,101 @@ export class FlintSettingTab extends PluginSettingTab {
 						this.plugin.settings.useEmbeddings = value;
 						await this.plugin.saveSettings();
 					});
+			});
+
+		new Setting(containerEl)
+			.setName("Embedding provider")
+			.setDesc(
+				"Independent of the chat provider above — Anthropic has no embeddings API.",
+			)
+			.addDropdown((dropdown) => {
+				dropdown
+					.addOptions({
+						openai: "OpenAI",
+						nim: "NVIDIA NIM",
+						ollama: "Ollama",
+						none: "None (keyword-only)",
+					})
+					.setValue(this.plugin.settings.embeddingProvider)
+					.onChange(async (value) => {
+						this.plugin.settings.embeddingProvider =
+							value as EmbeddingProviderId;
+						await this.plugin.saveSettings();
+					});
+			});
+
+		new Setting(containerEl)
+			.setName("Embedding model")
+			.setDesc(
+				"e.g. text-embedding-3-small (OpenAI/NIM) or nomic-embed-text (Ollama).",
+			)
+			.addText((text) => {
+				text
+					.setPlaceholder("text-embedding-3-small")
+					.setValue(this.plugin.settings.embeddingModel)
+					.onChange(async (value) => {
+						this.plugin.settings.embeddingModel = value;
+						await this.plugin.saveSettings();
+					});
+			});
+
+		new Setting(containerEl)
+			.setName("Embedding dimensions")
+			.setDesc(
+				"Matryoshka truncation via OpenAI's `dimensions` param. Ignored by Ollama, which returns its model's native size.",
+			)
+			.addText((text) => {
+				text
+					.setPlaceholder("512")
+					.setValue(String(this.plugin.settings.embeddingDimensions))
+					.onChange(async (value) => {
+						const dims = Number.parseInt(value, 10);
+						if (Number.isFinite(dims) && dims > 0) {
+							this.plugin.settings.embeddingDimensions = dims;
+							await this.plugin.saveSettings();
+						}
+					});
+			});
+
+		const embeddingStatusSetting = new Setting(containerEl).setName(
+			"Embedding status",
+		);
+		const describeEmbeddingStatus = () => {
+			const status = this.plugin.vaultIndex?.embeddingStatus();
+			embeddingStatusSetting.setDesc(
+				status
+					? `${status.embedded}/${status.total} chunks embedded${status.pending > 0 ? ` (${status.pending} pending retry)` : ""}.`
+					: "Not indexed yet.",
+			);
+		};
+		describeEmbeddingStatus();
+		embeddingStatusSetting.addExtraButton((button) => {
+			button
+				.setIcon("refresh-cw")
+				.setTooltip("Refresh status")
+				.onClick(() => describeEmbeddingStatus());
+		});
+
+		new Setting(containerEl)
+			.setName("Rebuild embeddings")
+			.setDesc(
+				"Drops the cached vectors and re-embeds every chunk from scratch.",
+			)
+			.addButton((button) => {
+				button.setButtonText("Rebuild").onClick(async () => {
+					button.setDisabled(true).setButtonText("Rebuilding...");
+					try {
+						await this.plugin.rebuildEmbeddings();
+						new Notice("Flint: embeddings rebuilt.");
+					} catch (error) {
+						const message =
+							error instanceof Error ? error.message : String(error);
+						new Notice(`Flint: rebuild failed — ${message}`);
+					} finally {
+						button.setDisabled(false).setButtonText("Rebuild");
+						describeEmbeddingStatus();
+					}
+				});
 			});
 
 		new Setting(containerEl)

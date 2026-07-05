@@ -79,7 +79,7 @@ export async function runPipeline(
 	index: VaultIndex,
 	opts: PipelineOptions = {},
 ): Promise<PipelineResult> {
-	const chunks = index.retrieve(query, opts.k ?? settings.retrievalCount);
+	const chunks = await index.retrieve(query, opts.k ?? settings.retrievalCount);
 	const systemPrompt = buildSystemPrompt(chunks);
 
 	const messages: ChatMessage[] = [

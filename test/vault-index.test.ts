@@ -1,7 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import { chunkNote } from "../src/index/chunk";
 import { VaultIndex } from "../src/index/vault-index";
+import { DEFAULT_SETTINGS } from "../src/settings";
 import { createFakeApp } from "./fake-vault";
+
+// Keyword-only settings for tests exercising pure MiniSearch ranking, so
+// they never attempt a network embedding call.
+function keywordOnlySettings() {
+	const settings = structuredClone(DEFAULT_SETTINGS);
+	settings.useEmbeddings = false;
+	return settings;
+}
 
 describe("chunkNote", () => {
 	test("splits a note into per-heading chunks", () => {
@@ -62,10 +71,10 @@ describe("VaultIndex", () => {
 			},
 		]);
 
-		const index = new VaultIndex(app, ["04 Dev Docs"]);
+		const index = new VaultIndex(app, ["04 Dev Docs"], keywordOnlySettings());
 		await index.build();
 
-		const results = index.retrieve("rocket engine");
+		const results = await index.retrieve("rocket engine");
 		expect(
 			results.some((r) => r.path === "04 Dev Docs/rocket-internal.md"),
 		).toBe(false);
@@ -88,10 +97,10 @@ describe("VaultIndex", () => {
 			},
 		]);
 
-		const index = new VaultIndex(app, []);
+		const index = new VaultIndex(app, [], keywordOnlySettings());
 		await index.build();
 
-		const results = index.retrieve("sourdough bread", 1);
+		const results = await index.retrieve("sourdough bread", 1);
 		expect(results).toHaveLength(1);
 		const topPath = results[0]?.path ?? "";
 		expect(["notes/cooking.md", "notes/baking-extra.md"]).toContain(topPath);
@@ -102,25 +111,25 @@ describe("VaultIndex", () => {
 		const app = createFakeApp([
 			{ path: "notes/a.md", content: "# A\nAlpha content about widgets." },
 		]);
-		const index = new VaultIndex(app, []);
+		const index = new VaultIndex(app, [], keywordOnlySettings());
 		await index.build();
 
-		expect(index.retrieve("widgets")).toHaveLength(1);
+		expect(await index.retrieve("widgets")).toHaveLength(1);
 
 		index.removePath("notes/a.md");
-		expect(index.retrieve("widgets")).toHaveLength(0);
+		expect(await index.retrieve("widgets")).toHaveLength(0);
 	});
 
 	test("setExcludeFolders + removePath reflect a folder becoming excluded", async () => {
 		const app = createFakeApp([
 			{ path: "04 Dev Docs/secret.md", content: "# Secret\nInternal only." },
 		]);
-		const index = new VaultIndex(app, []);
+		const index = new VaultIndex(app, [], keywordOnlySettings());
 		await index.build();
-		expect(index.retrieve("internal")).toHaveLength(1);
+		expect(await index.retrieve("internal")).toHaveLength(1);
 
 		index.setExcludeFolders(["04 Dev Docs"]);
 		await index.build();
-		expect(index.retrieve("internal")).toHaveLength(0);
+		expect(await index.retrieve("internal")).toHaveLength(0);
 	});
 });

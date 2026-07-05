@@ -45,10 +45,22 @@ export default class FlintPlugin extends Plugin {
 	clipWatcher!: ClipWatcher;
 	triageService!: TriageService;
 
+	private persistEmbeddingsDebounced = debounce(
+		() => {
+			void this.persistEmbeddingStore();
+		},
+		2000,
+		true,
+	);
+
 	async onload(): Promise<void> {
 		await this.loadSettings();
 
-		this.vaultIndex = new VaultIndex(this.app, this.settings.excludeFolders);
+		this.vaultIndex = new VaultIndex(
+			this.app,
+			this.settings.excludeFolders,
+			this.settings,
+		);
 		this.clipWatcher = new ClipWatcher(this);
 		this.triageService = new TriageService(this);
 
@@ -109,7 +121,11 @@ export default class FlintPlugin extends Plugin {
 		this.addSettingTab(new FlintSettingTab(this.app, this));
 
 		this.app.workspace.onLayoutReady(() => {
-			void this.vaultIndex.build();
+			void (async () => {
+				await this.loadEmbeddingStore();
+				await this.vaultIndex.build();
+				this.persistEmbeddingsDebounced();
+			})();
 			this.registerVaultIndexEvents();
 
 			if (this.settings.ingestEnabled) {
@@ -319,14 +335,17 @@ export default class FlintPlugin extends Plugin {
 			() => {
 				const paths = Array.from(pendingPaths);
 				pendingPaths.clear();
-				for (const path of paths) {
-					const file = this.app.vault.getAbstractFileByPath(path);
-					if (file instanceof TFile && file.extension === "md") {
-						void this.vaultIndex.indexFile(file);
-					} else {
-						this.vaultIndex.removePath(path);
+				void (async () => {
+					for (const path of paths) {
+						const file = this.app.vault.getAbstractFileByPath(path);
+						if (file instanceof TFile && file.extension === "md") {
+							await this.vaultIndex.indexFile(file);
+						} else {
+							this.vaultIndex.removePath(path);
+						}
 					}
-				}
+					this.persistEmbeddingsDebounced();
+				})();
 			},
 			1500,
 			true,
@@ -358,6 +377,49 @@ export default class FlintPlugin extends Plugin {
 
 	onunload(): void {
 		// STUB: no teardown needed yet (registerView is auto-cleaned by Obsidian).
+	}
+
+	/** Vault-relative path for the per-device embedding vector cache, stored
+	 * in the plugin dir (NOT via `saveData()` — that blob lives in data.json,
+	 * which is loaded on every startup on every synced device). */
+	private embeddingStorePath(): string {
+		return `${this.manifest.dir}/embeddings.json`;
+	}
+
+	/** Loads `embeddings.json` (if present) before the first index build so
+	 * unchanged chunks skip re-embedding. Any read/parse failure is treated as
+	 * a cold cache — safe, since the store is fully rebuildable. */
+	private async loadEmbeddingStore(): Promise<void> {
+		if (!this.manifest.dir) return;
+		try {
+			const path = this.embeddingStorePath();
+			if (!(await this.app.vault.adapter.exists(path))) return;
+			const json = await this.app.vault.adapter.read(path);
+			this.vaultIndex.loadEmbeddingStore(json);
+		} catch {
+			// Corrupt or unreadable store — ignore; build() will re-embed as needed.
+		}
+	}
+
+	/** Persists the current vector cache to `embeddings.json`. Best-effort:
+	 * a write failure never blocks indexing or chat. */
+	private async persistEmbeddingStore(): Promise<void> {
+		if (!this.manifest.dir) return;
+		try {
+			const json = this.vaultIndex.serializeEmbeddingStore();
+			await this.app.vault.adapter.write(this.embeddingStorePath(), json);
+		} catch {
+			// Best-effort cache write — a failure here just means a cold cache
+			// (and re-embed) next launch.
+		}
+	}
+
+	/** "Rebuild embeddings" settings button: drops the vector cache and
+	 * re-indexes the whole vault, re-embedding every chunk from scratch. */
+	async rebuildEmbeddings(): Promise<void> {
+		this.vaultIndex.clearEmbeddingCache();
+		await this.vaultIndex.build();
+		await this.persistEmbeddingStore();
 	}
 
 	async activateView(): Promise<void> {
