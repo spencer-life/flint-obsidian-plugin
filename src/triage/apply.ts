@@ -34,8 +34,10 @@ function normalizeHeadingText(text: string): string {
 
 /** True when `line` is a heading matching `heading`'s level and text, modulo
  * a leading emoji/symbol difference (e.g. "## 👉 Next small steps" vs.
- * "## Next small steps"). */
-function isMatchingHeading(line: string, heading: string): boolean {
+ * "## Next small steps"). Exported so other modules that need to locate a
+ * tracker's "Next small steps" section (e.g. the daily dashboard) reuse this
+ * matcher instead of re-implementing heading normalization. */
+export function isMatchingHeading(line: string, heading: string): boolean {
 	const parsedLine = parseHeadingLine(line);
 	const parsedHeading = parseHeadingLine(heading);
 	if (!parsedLine || !parsedHeading) return false;

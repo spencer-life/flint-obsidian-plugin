@@ -35,6 +35,8 @@ export interface FlintSettings {
 	captureFolder: string;
 	organizeEnabled: boolean;
 	organizeAutoApply: boolean;
+	dailyFolder: string;
+	dailyAutoGenerate: boolean;
 	imageProvider: "nim" | "openai";
 	imageModel: string;
 	imageSize: string;
@@ -68,6 +70,8 @@ export const DEFAULT_SETTINGS: FlintSettings = {
 	captureFolder: "00 Start/Inbox",
 	organizeEnabled: false,
 	organizeAutoApply: false,
+	dailyFolder: "00 Start/Daily",
+	dailyAutoGenerate: false,
 	imageProvider: "nim",
 	imageModel: "stabilityai/stable-diffusion-3-medium",
 	imageSize: "1024x1024",
@@ -594,6 +598,37 @@ export class FlintSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.organizeAutoApply)
 					.onChange(async (value) => {
 						this.plugin.settings.organizeAutoApply = value;
+						await this.plugin.saveSettings();
+					});
+			});
+
+		containerEl.createEl("h3", { text: "Daily dashboard" });
+
+		new Setting(containerEl)
+			.setName("Daily folder")
+			.setDesc(
+				"Vault folder the daily dashboard note is written to, as YYYY-MM-DD.md.",
+			)
+			.addText((text) => {
+				text
+					.setPlaceholder("00 Start/Daily")
+					.setValue(this.plugin.settings.dailyFolder)
+					.onChange(async (value) => {
+						this.plugin.settings.dailyFolder = value;
+						await this.plugin.saveSettings();
+					});
+			});
+
+		new Setting(containerEl)
+			.setName("Auto-generate daily dashboard")
+			.setDesc(
+				"Generates today's dashboard on startup if it doesn't exist yet. Never runs on mobile — the desktop/WSL client owns it.",
+			)
+			.addToggle((toggle) => {
+				toggle
+					.setValue(this.plugin.settings.dailyAutoGenerate)
+					.onChange(async (value) => {
+						this.plugin.settings.dailyAutoGenerate = value;
 						await this.plugin.saveSettings();
 					});
 			});

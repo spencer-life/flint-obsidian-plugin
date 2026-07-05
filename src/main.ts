@@ -8,6 +8,7 @@ import {
 	TFile,
 	type WorkspaceLeaf,
 } from "obsidian";
+import { DailyDashboardService } from "./dashboard/daily";
 import { buildDataUri, embedImageDataUri } from "./generate/compose";
 import {
 	buildHtmlPagePrompt,
@@ -46,6 +47,7 @@ export default class FlintPlugin extends Plugin {
 	clipWatcher!: ClipWatcher;
 	triageService!: TriageService;
 	organizeService!: OrganizeService;
+	dailyDashboardService!: DailyDashboardService;
 
 	private persistEmbeddingsDebounced = debounce(
 		() => {
@@ -66,6 +68,7 @@ export default class FlintPlugin extends Plugin {
 		this.clipWatcher = new ClipWatcher(this);
 		this.triageService = new TriageService(this);
 		this.organizeService = new OrganizeService(this);
+		this.dailyDashboardService = new DailyDashboardService(this);
 
 		this.registerView(VIEW_TYPE_FLINT, (leaf) => new FlintView(leaf, this));
 
@@ -138,6 +141,14 @@ export default class FlintPlugin extends Plugin {
 			},
 		});
 
+		this.addCommand({
+			id: "generate-daily-dashboard",
+			name: "Generate daily dashboard",
+			callback: () => {
+				void this.dailyDashboardService.runManual();
+			},
+		});
+
 		this.addSettingTab(new FlintSettingTab(this.app, this));
 
 		this.app.workspace.onLayoutReady(() => {
@@ -165,6 +176,10 @@ export default class FlintPlugin extends Plugin {
 						this.settings.autoTriageIntervalMinutes * 60 * 1000,
 					),
 				);
+			}
+
+			if (this.settings.dailyAutoGenerate) {
+				void this.dailyDashboardService.runAutoIfMissing();
 			}
 		});
 	}
