@@ -23,21 +23,6 @@
 	font-weight: 600;
 }
 
-.flint-controls {
-	display: flex;
-	gap: var(--size-4-1);
-	flex-wrap: wrap;
-}
-
-.flint-model-input {
-	min-width: 8rem;
-}
-
-.flint-refresh-btn {
-	min-width: 2rem;
-	padding: 0 var(--size-4-2);
-}
-
 .flint-test-status {
 	font-size: var(--font-ui-smaller);
 	padding: var(--size-4-1) var(--size-4-2);
@@ -120,6 +105,79 @@
 	font-size: var(--font-ui-smaller);
 }
 
+.flint-composer {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-4-1);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-m);
+	padding: var(--size-4-2);
+}
+
+.flint-attachments {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--size-4-1);
+}
+
+.flint-attachment-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--size-4-1);
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	background: var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	padding: 2px var(--size-4-1);
+}
+
+.flint-attachment-remove {
+	all: unset;
+	cursor: pointer;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	line-height: 1;
+}
+
+.flint-attachment-remove:hover {
+	color: var(--text-error);
+}
+
+.flint-model-row {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-1);
+	flex-wrap: wrap;
+}
+
+.flint-attach-btn {
+	min-width: 1.75rem;
+	padding: 0 var(--size-4-1);
+	color: var(--text-muted);
+}
+
+.flint-provider-select,
+.flint-model-input,
+.flint-refresh-btn {
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	background: var(--background-primary);
+	border: 1px solid var(--background-modifier-border);
+	box-shadow: none;
+	padding: 1px var(--size-4-1);
+	height: auto;
+}
+
+.flint-model-input {
+	min-width: 8rem;
+	flex: 1;
+}
+
+.flint-refresh-btn {
+	min-width: 1.75rem;
+	padding: 0 var(--size-4-1);
+}
+
 .flint-input-row {
 	display: flex;
 	gap: var(--size-4-2);
@@ -131,4 +189,7 @@
 	resize: none;
 	min-height: 2.5rem;
 	max-height: 8rem;
+	border: none;
+	box-shadow: none;
+	background: transparent;
 }

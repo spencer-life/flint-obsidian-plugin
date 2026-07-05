@@ -1,11 +1,17 @@
-import { Component, MarkdownRenderer } from "obsidian";
+import { Component, MarkdownRenderer, type TFile } from "obsidian";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { neutralizeRemoteImageMarkdown, runPipeline } from "../chat/pipeline";
 import { fetchModels, getProvider } from "../providers";
 import type { ChatMessage } from "../providers/types";
 import type { ProviderId } from "../settings";
 import { ModelSuggest } from "../ui/model-suggest";
+import { NotePickerModal } from "../ui/note-picker";
 import { useApp, usePlugin } from "./context";
+
+// Soft cap on how many notes can be attached as references at once, so the
+// pinned-notes section in the system prompt (each capped at ~4000 chars in
+// the pipeline) can't grow unbounded.
+const MAX_ATTACHMENTS = 5;
 
 // Protocol-relative (`//host/...`) or absolute http(s) URL.
 const REMOTE_URL_PATTERN = /^(?:https?:)?\/\//i;
@@ -145,6 +151,7 @@ export function FlintPanel() {
 		"idle" | "testing" | "ok" | "error"
 	>("idle");
 	const [testMessage, setTestMessage] = useState("");
+	const [attachments, setAttachments] = useState<TFile[]>([]);
 
 	const abortRef = useRef<AbortController | null>(null);
 	const listRef = useRef<HTMLDivElement>(null);
@@ -258,6 +265,24 @@ export function FlintPanel() {
 		abortRef.current?.abort();
 	}, []);
 
+	const handleAttach = useCallback(() => {
+		if (attachments.length >= MAX_ATTACHMENTS) return;
+		const modal = new NotePickerModal(
+			app,
+			attachments.map((file) => file.path),
+			(file) => {
+				setAttachments((prev) =>
+					prev.some((f) => f.path === file.path) ? prev : [...prev, file],
+				);
+			},
+		);
+		modal.open();
+	}, [app, attachments]);
+
+	const handleRemoveAttachment = useCallback((path: string) => {
+		setAttachments((prev) => prev.filter((f) => f.path !== path));
+	}, []);
+
 	const handleSend = useCallback(async () => {
 		const query = input.trim();
 		if (!query || isSending) return;
@@ -296,6 +321,8 @@ export function FlintPanel() {
 					history,
 					stream: plugin.settings.streamResponses,
 					signal: controller.signal,
+					pinnedPaths: attachments.map((file) => file.path),
+					app,
 					onToken: (token) => {
 						setMessages((prev) =>
 							prev.map((m) =>
@@ -337,58 +364,21 @@ export function FlintPanel() {
 			setIsSending(false);
 			abortRef.current = null;
 		}
-	}, [input, isSending, messages, plugin]);
+	}, [input, isSending, messages, plugin, attachments, app]);
 
 	return (
 		<div className="flint-panel">
 			<div className="flint-header">
 				<span className="flint-title">Flint</span>
-				<div className="flint-controls">
-					<select
-						className="flint-provider-select"
-						value={provider}
-						onChange={(event) =>
-							updateProvider(event.target.value as ProviderId)
-						}
-					>
-						<option value="anthropic">Anthropic</option>
-						<option value="nim">NVIDIA NIM</option>
-						<option value="openai">OpenAI</option>
-						<option value="ollama">Ollama</option>
-					</select>
-					<input
-						ref={modelInputRef}
-						className="flint-model-input"
-						type="text"
-						placeholder="model id"
-						value={model}
-						onChange={(event) => updateModel(event.target.value)}
-					/>
-					<button
-						type="button"
-						className="flint-refresh-btn"
-						onClick={() => void loadModels(true)}
-						disabled={modelStatus === "loading"}
-						title={modelStatus === "error" ? modelError : "Refresh model list"}
-					>
-						↻
-					</button>
-					<button
-						type="button"
-						className="flint-test-btn"
-						onClick={() => void handleTestConnection()}
-						disabled={testStatus === "testing"}
-					>
-						{testStatus === "testing" ? "Testing…" : "Test"}
-					</button>
-				</div>
+				<button
+					type="button"
+					className="flint-test-btn"
+					onClick={() => void handleTestConnection()}
+					disabled={testStatus === "testing"}
+				>
+					{testStatus === "testing" ? "Testing…" : "Test"}
+				</button>
 			</div>
-
-			{modelStatus === "error" && (
-				<div className="flint-test-status flint-test-error">
-					{modelError || "Couldn't load model list — using free text."}
-				</div>
-			)}
 
 			{testStatus !== "idle" && (
 				<div className={`flint-test-status flint-test-${testStatus}`}>
@@ -421,34 +411,105 @@ export function FlintPanel() {
 
 			{error && <div className="flint-error">{error}</div>}
 
-			<div className="flint-input-row">
-				<textarea
-					className="flint-input"
-					placeholder="Ask your vault..."
-					value={input}
-					onChange={(event) => setInput(event.target.value)}
-					onKeyDown={(event) => {
-						if (event.key === "Enter" && !event.shiftKey) {
-							event.preventDefault();
-							void handleSend();
-						}
-					}}
-					disabled={isSending}
-				/>
-				{isSending ? (
-					<button type="button" className="flint-stop" onClick={handleStop}>
-						Stop
-					</button>
-				) : (
+			<div className="flint-composer">
+				{attachments.length > 0 && (
+					<div className="flint-attachments">
+						{attachments.map((file) => (
+							<span key={file.path} className="flint-attachment-chip">
+								{file.basename}
+								<button
+									type="button"
+									className="flint-attachment-remove"
+									onClick={() => handleRemoveAttachment(file.path)}
+									aria-label={`Remove ${file.basename}`}
+								>
+									×
+								</button>
+							</span>
+						))}
+					</div>
+				)}
+
+				<div className="flint-model-row">
 					<button
 						type="button"
-						className="flint-send"
-						onClick={() => void handleSend()}
-						disabled={!input.trim()}
+						className="flint-attach-btn"
+						onClick={handleAttach}
+						disabled={attachments.length >= MAX_ATTACHMENTS}
+						title={
+							attachments.length >= MAX_ATTACHMENTS
+								? `Up to ${MAX_ATTACHMENTS} attached notes at once`
+								: "Attach a note as a reference"
+						}
 					>
-						Send
+						+
 					</button>
+					<select
+						className="flint-provider-select"
+						value={provider}
+						onChange={(event) =>
+							updateProvider(event.target.value as ProviderId)
+						}
+					>
+						<option value="anthropic">Anthropic</option>
+						<option value="nim">NVIDIA NIM</option>
+						<option value="openai">OpenAI</option>
+						<option value="ollama">Ollama</option>
+					</select>
+					<input
+						ref={modelInputRef}
+						className="flint-model-input"
+						type="text"
+						placeholder="model id"
+						value={model}
+						onChange={(event) => updateModel(event.target.value)}
+					/>
+					<button
+						type="button"
+						className="flint-refresh-btn"
+						onClick={() => void loadModels(true)}
+						disabled={modelStatus === "loading"}
+						title={modelStatus === "error" ? modelError : "Refresh model list"}
+					>
+						↻
+					</button>
+				</div>
+
+				{modelStatus === "error" && (
+					<div className="flint-test-status flint-test-error">
+						{modelError || "Couldn't load model list — using free text."}
+					</div>
 				)}
+
+				<div className="flint-input-row">
+					<textarea
+						className="flint-input"
+						placeholder="Ask your vault..."
+						value={input}
+						onChange={(event) => setInput(event.target.value)}
+						onKeyDown={(event) => {
+							if (event.key === "Enter" && !event.shiftKey) {
+								event.preventDefault();
+								void handleSend();
+							}
+						}}
+						disabled={isSending}
+					/>
+					{isSending ? (
+						<button type="button" className="flint-stop" onClick={handleStop}>
+							Stop
+						</button>
+					) : (
+						<button
+							type="button"
+							className="flint-send"
+							onClick={() => void handleSend()}
+							disabled={!input.trim()}
+						>
+							Send
+						</button>
+					)}
+				</div>
 			</div>
 		</div>
 	);

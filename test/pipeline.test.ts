@@ -164,6 +164,102 @@ describe("runPipeline", () => {
 		);
 	});
 
+	test("threads user-attached (pinned) notes into the system prompt above retrieved excerpts, and cites them", async () => {
+		const app = createFakeApp([
+			{
+				path: "01 Projects/rocket.md",
+				content:
+					"# Rocket engine\nDesigning a liquid-fuel rocket engine for the Mars mission.",
+			},
+			{
+				path: "Pinned/attached-note.md",
+				content: "This is the attached note's content.",
+			},
+		]);
+		const index = new VaultIndex(app, [], indexSettings());
+		await index.build();
+
+		setRequestUrlHandler(() => ({
+			json: { content: [{ text: "Here is the answer." }] },
+		}));
+
+		const settings = cloneSettings();
+		settings.activeProvider = "anthropic";
+		settings.providers.anthropic.apiKey = "sk-ant-test";
+
+		const result = await runPipeline("rocket engine fuel", settings, index, {
+			pinnedPaths: ["Pinned/attached-note.md"],
+			app,
+		});
+
+		expect(result.citations).toContain("Pinned/attached-note.md");
+		expect(result.citations).toContain("01 Projects/rocket.md");
+
+		const body = JSON.parse(requestUrlCalls[0]?.body ?? "{}");
+		expect(body.system).toContain("User-attached notes");
+		expect(body.system).toContain("Pinned/attached-note.md");
+		expect(body.system).toContain("This is the attached note's content.");
+
+		// Attached-notes section appears above the retrieved vault excerpts.
+		const attachedIdx = body.system.indexOf("User-attached notes");
+		const excerptsIdx = body.system.indexOf("Vault excerpts");
+		expect(attachedIdx).toBeGreaterThan(-1);
+		expect(excerptsIdx).toBeGreaterThan(attachedIdx);
+	});
+
+	test("skips a pinned path that no longer resolves to a readable note, without blocking the send", async () => {
+		const app = createFakeApp([
+			{ path: "Real/note.md", content: "Real content." },
+		]);
+		const index = new VaultIndex(app, [], indexSettings());
+		await index.build();
+
+		setRequestUrlHandler(() => ({
+			json: { content: [{ text: "ok" }] },
+		}));
+
+		const settings = cloneSettings();
+		settings.activeProvider = "anthropic";
+		settings.providers.anthropic.apiKey = "key";
+
+		const result = await runPipeline("anything", settings, index, {
+			pinnedPaths: ["Deleted/gone.md"],
+			app,
+		});
+
+		expect(result.answer).toBe("ok");
+		expect(result.citations).not.toContain("Deleted/gone.md");
+		const body = JSON.parse(requestUrlCalls[0]?.body ?? "{}");
+		expect(body.system).not.toContain("Deleted/gone.md");
+	});
+
+	test("truncates a pinned note longer than the per-note cap", async () => {
+		const longContent = "x".repeat(5000);
+		const app = createFakeApp([
+			{ path: "Pinned/long-note.md", content: longContent },
+		]);
+		const index = new VaultIndex(app, [], indexSettings());
+		await index.build();
+
+		setRequestUrlHandler(() => ({
+			json: { content: [{ text: "ok" }] },
+		}));
+
+		const settings = cloneSettings();
+		settings.activeProvider = "anthropic";
+		settings.providers.anthropic.apiKey = "key";
+
+		await runPipeline("anything", settings, index, {
+			pinnedPaths: ["Pinned/long-note.md"],
+			app,
+		});
+
+		const body = JSON.parse(requestUrlCalls[0]?.body ?? "{}");
+		expect(body.system).not.toContain(longContent);
+		expect(body.system).toContain("x".repeat(4000));
+		expect(body.system).toContain("[truncated]");
+	});
+
 	test("includes prior conversation history between the system prompt and the new query", async () => {
 		const app = createFakeApp([]);
 		const index = new VaultIndex(app, [], indexSettings());
