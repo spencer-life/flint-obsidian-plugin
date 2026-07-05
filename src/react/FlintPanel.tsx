@@ -456,23 +456,27 @@ export function FlintPanel() {
 						<option value="openai">OpenAI</option>
 						<option value="ollama">Ollama</option>
 					</select>
-					<input
-						ref={modelInputRef}
-						className="flint-model-input"
-						type="text"
-						placeholder="model id"
-						value={model}
-						onChange={(event) => updateModel(event.target.value)}
-					/>
-					<button
-						type="button"
-						className="flint-refresh-btn"
-						onClick={() => void loadModels(true)}
-						disabled={modelStatus === "loading"}
-						title={modelStatus === "error" ? modelError : "Refresh model list"}
-					>
-						↻
-					</button>
+					<div className="flint-model-group">
+						<input
+							ref={modelInputRef}
+							className="flint-model-input"
+							type="text"
+							placeholder="model id"
+							value={model}
+							onChange={(event) => updateModel(event.target.value)}
+						/>
+						<button
+							type="button"
+							className="flint-refresh-btn"
+							onClick={() => void loadModels(true)}
+							disabled={modelStatus === "loading"}
+							title={
+								modelStatus === "error" ? modelError : "Refresh model list"
+							}
+						>
+							↻
+						</button>
+					</div>
 				</div>
 
 				{modelStatus === "error" && (

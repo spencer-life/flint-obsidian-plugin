@@ -168,9 +168,18 @@
 	height: auto;
 }
 
+.flint-model-group {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-1);
+	flex: 1 1 10rem;
+	min-width: 0;
+}
+
 .flint-model-input {
-	min-width: 8rem;
 	flex: 1;
+	min-width: 0;
+	text-overflow: ellipsis;
 }
 
 .flint-refresh-btn {
