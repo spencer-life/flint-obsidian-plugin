@@ -150,22 +150,44 @@
 	flex-wrap: wrap;
 }
 
-.flint-attach-btn {
-	min-width: 1.75rem;
-	padding: 0 var(--size-4-1);
-	color: var(--text-muted);
-}
-
+/* One visual species for every composer control: same height, same
+ * capsule shape, same type and colors. Explicit height/appearance
+ * overrides matter on mobile, where Obsidian's theme inflates inputs
+ * and selects to touch-size and each control ends up a different shape. */
+.flint-attach-btn,
 .flint-provider-select,
 .flint-model-input,
 .flint-refresh-btn {
+	appearance: none;
+	-webkit-appearance: none;
+	height: 1.75rem;
+	line-height: 1.75rem;
 	font-size: var(--font-ui-smaller);
 	color: var(--text-muted);
 	background: var(--background-primary);
 	border: 1px solid var(--background-modifier-border);
+	border-radius: 999px;
 	box-shadow: none;
-	padding: 1px var(--size-4-1);
-	height: auto;
+	padding: 0 var(--size-4-2);
+	margin: 0;
+}
+
+.flint-attach-btn,
+.flint-refresh-btn {
+	width: 1.75rem;
+	min-width: 1.75rem;
+	flex: 0 0 auto;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	padding: 0;
+	cursor: pointer;
+}
+
+.flint-provider-select {
+	flex: 0 1 auto;
+	min-width: 0;
+	cursor: pointer;
 }
 
 .flint-model-group {
@@ -180,11 +202,6 @@
 	flex: 1;
 	min-width: 0;
 	text-overflow: ellipsis;
-}
-
-.flint-refresh-btn {
-	min-width: 1.75rem;
-	padding: 0 var(--size-4-1);
 }
 
 .flint-input-row {
