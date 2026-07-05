@@ -79,7 +79,7 @@ export default class FlintPlugin extends Plugin {
 
 		this.addCommand({
 			id: "open-flint-panel",
-			name: "Open Flint panel",
+			name: "Open panel",
 			callback: () => {
 				void this.activateView();
 			},

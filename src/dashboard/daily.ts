@@ -170,7 +170,7 @@ export class DailyDashboardService {
 	 * file. Only reached after explicit user confirmation. */
 	private async regenerate(file: TFile): Promise<void> {
 		const markdown = buildDailyNote(await this.gatherData(new Date()));
-		await this.app.vault.modify(file, markdown);
+		await this.app.vault.process(file, () => markdown);
 	}
 
 	/** "Generate daily dashboard" command: asks via a confirm modal before

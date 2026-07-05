@@ -118,9 +118,9 @@ export class FlintSettingTab extends PluginSettingTab {
 		const { containerEl } = this;
 		containerEl.empty();
 
-		containerEl.createEl("h2", { text: "Flint settings" });
+		
 
-		containerEl.createEl("h3", { text: "Providers" });
+		new Setting(containerEl).setName("Providers").setHeading();
 
 		new Setting(containerEl)
 			.setName("Anthropic API key")
@@ -210,7 +210,7 @@ export class FlintSettingTab extends PluginSettingTab {
 					});
 			});
 
-		containerEl.createEl("h3", { text: "Model" });
+		new Setting(containerEl).setName("Model").setHeading();
 
 		new Setting(containerEl)
 			.setName("Active provider")
@@ -281,7 +281,7 @@ export class FlintSettingTab extends PluginSettingTab {
 				.onClick(() => populateModelList(true));
 		});
 
-		containerEl.createEl("h3", { text: "Task models" });
+		new Setting(containerEl).setName("Task models").setHeading();
 		containerEl.createEl("p", {
 			text: "Optional per-task overrides. Leave empty to use the active model above. Model ids below apply to the currently active provider.",
 			cls: "setting-item-description",
@@ -338,7 +338,7 @@ export class FlintSettingTab extends PluginSettingTab {
 			"htmlGenerate",
 		);
 
-		containerEl.createEl("h3", { text: "Vault indexing" });
+		new Setting(containerEl).setName("Vault indexing").setHeading();
 
 		new Setting(containerEl)
 			.setName("Use embeddings")
@@ -468,7 +468,7 @@ export class FlintSettingTab extends PluginSettingTab {
 					});
 			});
 
-		containerEl.createEl("h3", { text: "Web clip ingest" });
+		new Setting(containerEl).setName("Web clip ingest").setHeading();
 
 		new Setting(containerEl)
 			.setName("Enable clip ingest")
@@ -513,7 +513,7 @@ export class FlintSettingTab extends PluginSettingTab {
 					});
 			});
 
-		containerEl.createEl("h3", { text: "Chat" });
+		new Setting(containerEl).setName("Chat").setHeading();
 
 		new Setting(containerEl)
 			.setName("Stream responses")
@@ -529,7 +529,7 @@ export class FlintSettingTab extends PluginSettingTab {
 					});
 			});
 
-		containerEl.createEl("h3", { text: "Capture triage" });
+		new Setting(containerEl).setName("Capture triage").setHeading();
 
 		new Setting(containerEl)
 			.setName("Inbox notes")
@@ -589,7 +589,7 @@ export class FlintSettingTab extends PluginSettingTab {
 					});
 			});
 
-		containerEl.createEl("h3", { text: "Content generation" });
+		new Setting(containerEl).setName("Content generation").setHeading();
 
 		new Setting(containerEl)
 			.setName("Image provider")
@@ -646,7 +646,7 @@ export class FlintSettingTab extends PluginSettingTab {
 					});
 			});
 
-		containerEl.createEl("h3", { text: "Auto-organize captures" });
+		new Setting(containerEl).setName("Auto-organize captures").setHeading();
 
 		new Setting(containerEl)
 			.setName("Enable auto-organize")
@@ -691,7 +691,7 @@ export class FlintSettingTab extends PluginSettingTab {
 					});
 			});
 
-		containerEl.createEl("h3", { text: "Daily dashboard" });
+		new Setting(containerEl).setName("Daily dashboard").setHeading();
 
 		new Setting(containerEl)
 			.setName("Daily folder")
