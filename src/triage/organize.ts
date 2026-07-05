@@ -197,7 +197,10 @@ export class OrganizeService {
 		});
 
 		if (this.plugin.settings.organizeAutoApply && !Platform.isMobile) {
-			await this.applySuggestions(file);
+			// Apply from the suggestion in hand — the metadata cache won't have
+			// re-indexed the frontmatter written just above yet, so the
+			// cache-reading path would silently see "not organized" and no-op.
+			await this.applyResolved(file, suggestion.title, suggestion.destination);
 		}
 	}
 
@@ -238,6 +241,18 @@ export class OrganizeService {
 				? (frontmatter["flint-suggest-dest"] as string)
 				: undefined;
 
+		await this.applyResolved(file, title, destination ?? null);
+	}
+
+	/** Shared move/rename core: files `file` into `destination` (already
+	 * allowlist-validated upstream) under the sanitized `title` basename.
+	 * Takes the values directly so the fresh-suggestion path never depends on
+	 * the (possibly stale) metadata cache. */
+	private async applyResolved(
+		file: TFile,
+		title: string | undefined,
+		destination: string | null,
+	): Promise<void> {
 		const parentPath = destination ?? file.parent?.path ?? "";
 		const basename =
 			title && title.trim().length > 0 ? title.trim() : file.basename;
