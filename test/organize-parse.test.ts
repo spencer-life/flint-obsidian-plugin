@@ -193,3 +193,17 @@ describe("buildOrganizeLogLine", () => {
 		);
 	});
 });
+
+describe("organize sanitization vs link syntax", () => {
+	test("strips wikilink/embed metacharacters from suggested titles", () => {
+		expect(sanitizeOrganizeTitle("Good]] ![[Secrets")).toBe(
+			"Good-- !--Secrets",
+		);
+	});
+
+	test("log line neutralizes brackets and backticks from arbitrary old paths", () => {
+		expect(
+			buildOrganizeLogLine("03 Clippings/x`]].md", "01 Projects/Note.md", "t"),
+		).toBe("- t — [[01 Projects/Note]] ← was `03 Clippings/x']].md`");
+	});
+});

@@ -8,9 +8,8 @@ import {
 } from "obsidian";
 import { neutralizeRemoteImageMarkdown } from "../chat/pipeline";
 import type FlintPlugin from "../main";
-import { getProvider } from "../providers";
+import { chatWithTaskModel } from "../providers";
 import type { ChatMessage } from "../providers/types";
-import { resolveTaskModel } from "../settings";
 import {
 	buildDailyNote,
 	type DashboardData,
@@ -118,10 +117,11 @@ export class DailyDashboardService {
 				});
 			}
 
-			const provider = getProvider(this.plugin.settings);
-			const raw = await provider.chat(buildSummaryPrompt(excerpts), {
-				model: resolveTaskModel(this.plugin.settings, "dashboard"),
-			});
+			const raw = await chatWithTaskModel(
+				this.plugin.settings,
+				"dashboard",
+				buildSummaryPrompt(excerpts),
+			);
 			return neutralizeRemoteImageMarkdown(raw.trim());
 		} catch {
 			return null;

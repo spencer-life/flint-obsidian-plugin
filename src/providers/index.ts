@@ -1,8 +1,14 @@
+import { Notice } from "obsidian";
 import { sha256Hex } from "../index/embedding-store";
-import type { FlintSettings, ProviderId } from "../settings";
+import {
+	type FlintSettings,
+	type ProviderId,
+	resolveTaskModel,
+	type TaskModelKey,
+} from "../settings";
 import { AnthropicProvider } from "./anthropic";
 import { NIM_BASE_URL, OpenAICompatibleProvider } from "./openai-compatible";
-import type { Provider } from "./types";
+import type { ChatMessage, Provider } from "./types";
 
 export type { ChatMessage, ChatOptions, Provider } from "./types";
 
@@ -67,6 +73,34 @@ function buildProvider(
 		baseUrl: config.baseUrl,
 		apiKey: config.apiKey,
 	});
+}
+
+/**
+ * Runs a background-task chat call with the task's model override, falling
+ * back to the chat `activeModel` if the override fails. Guards the case
+ * where a per-task model id belongs to a previously-active provider (task
+ * overrides survive provider switches) — without this, a stale override
+ * silently breaks the automation that depends on it. The fallback is
+ * surfaced via a Notice so a misconfigured override isn't invisible.
+ */
+export async function chatWithTaskModel(
+	settings: FlintSettings,
+	task: TaskModelKey,
+	messages: ChatMessage[],
+): Promise<string> {
+	const provider = getProvider(settings);
+	const model = resolveTaskModel(settings, task);
+	if (model === settings.activeModel) {
+		return provider.chat(messages, { model });
+	}
+	try {
+		return await provider.chat(messages, { model });
+	} catch {
+		new Notice(
+			`Flint: task model "${model}" failed — retrying with the chat model.`,
+		);
+		return provider.chat(messages, { model: settings.activeModel });
+	}
 }
 
 interface ModelsCacheEntry {

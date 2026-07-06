@@ -29,7 +29,11 @@ export const MAX_TITLE_LENGTH = 180;
 /** Hard cap on how many tags a single suggestion can carry. */
 export const MAX_TAGS = 8;
 
-const WINDOWS_UNSAFE_CHARS = /[\\/:*?"<>|]/g;
+/** Windows-unsafe filename characters PLUS Obsidian's own forbidden note-name
+ * characters (`[ ] # ^ |`) — stripping the brackets also prevents an
+ * LLM-suggested title from smuggling wikilink/embed syntax into filenames and
+ * the activity log. */
+const WINDOWS_UNSAFE_CHARS = /[\\/:*?"<>|[\]#^]/g;
 
 // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping control chars is the point here.
 const CONTROL_CHAR_PATTERN = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g;
@@ -113,8 +117,13 @@ export function buildOrganizeLogLine(
 	newPath: string,
 	timestamp: string,
 ): string {
-	const linkTarget = newPath.replace(/\.md$/i, "");
-	return `- ${timestamp} — [[${linkTarget}]] ← was \`${oldPath}\``;
+	// Defense in depth: link/embed metacharacters can't appear in paths we
+	// created (titles are sanitized), but the ORIGINAL filename is arbitrary
+	// vault input — neutralize anything that could break out of the inline
+	// code span or forge link syntax in the log.
+	const linkTarget = newPath.replace(/\.md$/i, "").replace(/[[\]`]/g, "");
+	const oldSafe = oldPath.replace(/`/g, "'");
+	return `- ${timestamp} — [[${linkTarget}]] ← was \`${oldSafe}\``;
 }
 
 export function parseOrganizeResponse(

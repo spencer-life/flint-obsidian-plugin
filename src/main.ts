@@ -31,12 +31,11 @@ import {
 } from "./ingest/clip-processor";
 import { fetchAndConvert } from "./ingest/refetch";
 import { ClipWatcher } from "./ingest/watcher";
-import { getProvider } from "./providers";
+import { chatWithTaskModel, getProvider } from "./providers";
 import {
 	DEFAULT_SETTINGS,
 	type FlintSettings,
 	FlintSettingTab,
-	resolveTaskModel,
 } from "./settings";
 import { OrganizeService } from "./triage/organize";
 import { TriageService } from "./triage/triage";
@@ -263,10 +262,10 @@ export default class FlintPlugin extends Plugin {
 		file: TFile,
 		content: string,
 	): Promise<string> {
-		const provider = getProvider(this.settings);
-		const reply = await provider.chat(
+		const reply = await chatWithTaskModel(
+			this.settings,
+			"htmlGenerate",
 			buildHtmlPagePrompt(file.basename, content),
-			{ model: resolveTaskModel(this.settings, "htmlGenerate") },
 		);
 		return sanitizeHtmlDocument(stripReplyFences(reply));
 	}

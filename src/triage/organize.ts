@@ -10,12 +10,12 @@ import {
 import { nextAvailablePath } from "../generate/html";
 import { isWithinFolder } from "../ingest/clip-processor";
 import type FlintPlugin from "../main";
-import { getProvider } from "../providers";
-import { resolveTaskModel } from "../settings";
+import { chatWithTaskModel } from "../providers";
 import {
 	buildOrganizeLogLine,
 	type OrganizeSuggestion,
 	parseOrganizeResponse,
+	resolveOrganizeDestination,
 } from "./organize-parse";
 import { buildOrganizePrompt, type SimilarNote } from "./organize-prompt";
 
@@ -180,10 +180,11 @@ export class OrganizeService {
 
 		let suggestion: OrganizeSuggestion;
 		try {
-			const provider = getProvider(this.plugin.settings);
-			const raw = await provider.chat(messages, {
-				model: resolveTaskModel(this.plugin.settings, "organize"),
-			});
+			const raw = await chatWithTaskModel(
+				this.plugin.settings,
+				"organize",
+				messages,
+			);
 			suggestion = parseOrganizeResponse(raw, allowlist);
 		} catch {
 			// Bad/unparseable LLM response — write nothing, leave the capture
@@ -240,12 +241,22 @@ export class OrganizeService {
 			typeof frontmatter?.["flint-suggest-title"] === "string"
 				? (frontmatter["flint-suggest-title"] as string)
 				: undefined;
-		const destination =
+		const rawDestination =
 			typeof frontmatter?.["flint-suggest-dest"] === "string"
 				? (frontmatter["flint-suggest-dest"] as string)
 				: undefined;
 
-		await this.applyResolved(file, title, destination ?? null);
+		// Re-validate against the LIVE allowlist: frontmatter is editable by
+		// anything (user, other plugins, a clip that arrives with pre-seeded
+		// suggest fields), so a stored destination is never trusted on read.
+		const destination = rawDestination
+			? resolveOrganizeDestination(
+					rawDestination,
+					this.computeDestinationAllowlist(),
+				)
+			: null;
+
+		await this.applyResolved(file, title, destination);
 	}
 
 	/** Shared move/rename core: files `file` into `destination` (already
@@ -286,10 +297,23 @@ export class OrganizeService {
 					(data) => `${data.trimEnd()}\n${line}\n`,
 				);
 			} else if (existing === null) {
-				await this.app.vault.create(
-					ORGANIZE_LOG_PATH,
-					`# Flint Log\n\nNotes auto-filed by Flint's organize feature (newest at the bottom).\n\n${line}\n`,
-				);
+				try {
+					await this.app.vault.create(
+						ORGANIZE_LOG_PATH,
+						`# Flint Log\n\nNotes auto-filed by Flint's organize feature (newest at the bottom).\n\n${line}\n`,
+					);
+				} catch {
+					// Create collision: a concurrent move created the log between
+					// our lookup and create. Re-resolve and append instead so this
+					// move's entry isn't lost.
+					const raced = this.app.vault.getAbstractFileByPath(ORGANIZE_LOG_PATH);
+					if (raced instanceof TFile) {
+						await this.app.vault.process(
+							raced,
+							(data) => `${data.trimEnd()}\n${line}\n`,
+						);
+					}
+				}
 			}
 		} catch {
 			// Best-effort: never let logging break an applied move.
