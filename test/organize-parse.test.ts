@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+	buildOrganizeLogLine,
 	MAX_TAGS,
 	MAX_TITLE_LENGTH,
 	parseOrganizeResponse,
@@ -170,5 +171,25 @@ describe("resolveOrganizeDestination", () => {
 		expect(resolveOrganizeDestination(undefined, ALLOWLIST)).toBeNull();
 		expect(resolveOrganizeDestination("", ALLOWLIST)).toBeNull();
 		expect(resolveOrganizeDestination(42, ALLOWLIST)).toBeNull();
+	});
+});
+
+describe("buildOrganizeLogLine", () => {
+	test("links the new path (extension stripped) and quotes the old path", () => {
+		expect(
+			buildOrganizeLogLine(
+				"03 Clippings/Home.md",
+				"01 Projects/Tools/Sanity UI.md",
+				"2026-07-05 17:00",
+			),
+		).toBe(
+			"- 2026-07-05 17:00 — [[01 Projects/Tools/Sanity UI]] ← was `03 Clippings/Home.md`",
+		);
+	});
+
+	test("only strips a trailing .md, case-insensitively", () => {
+		expect(buildOrganizeLogLine("a.md", "01 Projects/Note.MD", "t")).toBe(
+			"- t — [[01 Projects/Note]] ← was `a.md`",
+		);
 	});
 });

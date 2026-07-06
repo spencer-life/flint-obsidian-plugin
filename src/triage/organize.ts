@@ -13,12 +13,16 @@ import type FlintPlugin from "../main";
 import { getProvider } from "../providers";
 import { resolveTaskModel } from "../settings";
 import {
+	buildOrganizeLogLine,
 	type OrganizeSuggestion,
 	parseOrganizeResponse,
 } from "./organize-parse";
 import { buildOrganizePrompt, type SimilarNote } from "./organize-prompt";
 
 const DEBOUNCE_MS = 1200;
+
+/** Vault-root note that receives one line per applied organize move. */
+const ORGANIZE_LOG_PATH = "Flint Log.md";
 
 /** How much of a capture's content to feed the semantic-similarity lookup —
  * capped so a huge capture doesn't blow up the retrieval query. */
@@ -262,7 +266,33 @@ export class OrganizeService {
 
 		const targetPath = this.nextAvailableVaultPath(desiredPath, file.path);
 		if (targetPath !== file.path) {
+			const oldPath = file.path;
 			await this.app.fileManager.renameFile(file, targetPath);
+			await this.appendMoveLog(oldPath, targetPath);
+		}
+	}
+
+	/** Appends one line to the vault-root activity log for an applied move.
+	 * Logging is best-effort only — a failure here must never break the
+	 * filing that already happened. */
+	private async appendMoveLog(oldPath: string, newPath: string): Promise<void> {
+		try {
+			const timestamp = window.moment().format("YYYY-MM-DD HH:mm");
+			const line = buildOrganizeLogLine(oldPath, newPath, timestamp);
+			const existing = this.app.vault.getAbstractFileByPath(ORGANIZE_LOG_PATH);
+			if (existing instanceof TFile) {
+				await this.app.vault.process(
+					existing,
+					(data) => `${data.trimEnd()}\n${line}\n`,
+				);
+			} else if (existing === null) {
+				await this.app.vault.create(
+					ORGANIZE_LOG_PATH,
+					`# Flint Log\n\nNotes auto-filed by Flint's organize feature (newest at the bottom).\n\n${line}\n`,
+				);
+			}
+		} catch {
+			// Best-effort: never let logging break an applied move.
 		}
 	}
 

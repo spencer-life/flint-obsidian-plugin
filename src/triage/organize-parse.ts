@@ -102,6 +102,21 @@ export function resolveOrganizeDestination(
  * throw, since a missing/bad tag list or an out-of-allowlist destination is
  * an expected, safely-degradable case, not a structural failure.
  */
+/**
+ * One activity-log line for a single applied organize move. `newPath` becomes
+ * a wikilink (extension stripped) so the log entry stays clickable even
+ * though the note has left the capture folder; the old path is kept as
+ * inline code — it no longer exists, so a link would be dead.
+ */
+export function buildOrganizeLogLine(
+	oldPath: string,
+	newPath: string,
+	timestamp: string,
+): string {
+	const linkTarget = newPath.replace(/\.md$/i, "");
+	return `- ${timestamp} — [[${linkTarget}]] ← was \`${oldPath}\``;
+}
+
 export function parseOrganizeResponse(
 	raw: string,
 	allowedDestinations: string[],
