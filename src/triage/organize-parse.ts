@@ -11,13 +11,47 @@
  * dropped rather than trusted — title/tag suggestions still stand.
  */
 
+export type OrganizeConfidence = "high" | "medium" | "low";
+
 /** A single organize suggestion for one capture note. `destination` is
  * `null` when the LLM didn't suggest one, or suggested one that isn't an
- * exact match in the allowlist (rejected, never trusted). */
+ * exact match in the allowlist (rejected, never trusted). `confidence` is
+ * the model's self-reported certainty about the destination; a missing or
+ * malformed value degrades to "low" (never throws). */
 export interface OrganizeSuggestion {
 	title: string;
 	tags: string[];
 	destination: string | null;
+	confidence: OrganizeConfidence;
+}
+
+const CONFIDENCE_RANK: Record<OrganizeConfidence, number> = {
+	low: 0,
+	medium: 1,
+	high: 2,
+};
+
+/**
+ * Lenient confidence parse: any casing of the three levels is accepted;
+ * everything else (missing, wrong type, made-up value) is "low" — the safe
+ * direction, since low confidence suppresses the destination downstream.
+ */
+export function parseOrganizeConfidence(value: unknown): OrganizeConfidence {
+	if (typeof value !== "string") return "low";
+	const normalized = value.trim().toLowerCase();
+	return normalized === "high" ||
+		normalized === "medium" ||
+		normalized === "low"
+		? normalized
+		: "low";
+}
+
+/** True when `confidence` clears the configured minimum bar. */
+export function meetsOrganizeConfidence(
+	confidence: OrganizeConfidence,
+	minimum: OrganizeConfidence,
+): boolean {
+	return CONFIDENCE_RANK[confidence] >= CONFIDENCE_RANK[minimum];
 }
 
 const JSON_FENCE_PATTERN = /```(?:json)?\s*([\s\S]*?)```/i;
@@ -162,5 +196,6 @@ export function parseOrganizeResponse(
 			obj["destination"],
 			allowedDestinations,
 		),
+		confidence: parseOrganizeConfidence(obj["confidence"]),
 	};
 }

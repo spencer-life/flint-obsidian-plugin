@@ -8,7 +8,14 @@ import {
 	setRequestUrlHandler,
 } from "./obsidian-mock";
 
-const { DEFAULT_SETTINGS, resolveTaskModel } = await import("../src/settings");
+const {
+	DEFAULT_SETTINGS,
+	loadSettingsFromRaw,
+	migrateTaskModels,
+	resolveTaskModel,
+	SETTINGS_VERSION,
+} = await import("../src/settings");
+const { chatWithTaskModel } = await import("../src/providers");
 const { TriageService } = await import("../src/triage/triage");
 
 beforeEach(() => {
@@ -20,26 +27,220 @@ function cloneSettings() {
 }
 
 describe("resolveTaskModel", () => {
-	test("falls back to activeModel when the task override is empty", () => {
+	test("falls back to activeModel on the active provider when the override is empty", () => {
 		const settings = cloneSettings();
-		settings.activeModel = "claude-sonnet-4-5";
-		expect(resolveTaskModel(settings, "triage")).toBe("claude-sonnet-4-5");
+		settings.activeProvider = "nim";
+		settings.activeModel = "moonshotai/kimi-k2.6";
+		expect(resolveTaskModel(settings, "triage")).toEqual({
+			providerId: "nim",
+			model: "moonshotai/kimi-k2.6",
+		});
 	});
 
-	test("falls back to activeModel when the task override is whitespace-only", () => {
+	test("falls back when the override model is whitespace-only", () => {
 		const settings = cloneSettings();
 		settings.activeModel = "claude-sonnet-4-5";
-		settings.taskModels.organize = "   ";
-		expect(resolveTaskModel(settings, "organize")).toBe("claude-sonnet-4-5");
+		settings.taskModels.organize = { providerId: "nim", model: "   " };
+		expect(resolveTaskModel(settings, "organize")).toEqual({
+			providerId: "anthropic",
+			model: "claude-sonnet-4-5",
+		});
 	});
 
-	test("uses the task override when set", () => {
+	test("uses the override's own provider when pinned", () => {
 		const settings = cloneSettings();
+		settings.activeProvider = "anthropic";
 		settings.activeModel = "claude-sonnet-4-5";
-		settings.taskModels.dashboard = "google/gemma-3-12b-it";
-		expect(resolveTaskModel(settings, "dashboard")).toBe(
-			"google/gemma-3-12b-it",
+		settings.taskModels.dashboard = {
+			providerId: "nim",
+			model: "google/gemma-3-12b-it",
+		};
+		expect(resolveTaskModel(settings, "dashboard")).toEqual({
+			providerId: "nim",
+			model: "google/gemma-3-12b-it",
+		});
+	});
+
+	test("an override with a model but empty provider runs on the active provider", () => {
+		const settings = cloneSettings();
+		settings.activeProvider = "openai";
+		settings.taskModels.triage = { providerId: "", model: "gpt-4.1-mini" };
+		expect(resolveTaskModel(settings, "triage")).toEqual({
+			providerId: "openai",
+			model: "gpt-4.1-mini",
+		});
+	});
+});
+
+describe("migrateTaskModels", () => {
+	test("converts legacy string overrides, pinning them to the legacy provider", () => {
+		const migrated = migrateTaskModels(
+			{
+				triage: "deepseek-ai/deepseek-v4-flash",
+				organize: "deepseek-ai/deepseek-v4-flash",
+				dashboard: "google/gemma-3-12b-it",
+				htmlGenerate: "",
+			},
+			"nim",
 		);
+		expect(migrated.triage).toEqual({
+			providerId: "nim",
+			model: "deepseek-ai/deepseek-v4-flash",
+		});
+		expect(migrated.dashboard).toEqual({
+			providerId: "nim",
+			model: "google/gemma-3-12b-it",
+		});
+		expect(migrated.htmlGenerate).toEqual({ providerId: "", model: "" });
+	});
+
+	test("passes through already-migrated object overrides", () => {
+		const migrated = migrateTaskModels(
+			{ triage: { providerId: "openai", model: "gpt-4.1" } },
+			"nim",
+		);
+		expect(migrated.triage).toEqual({ providerId: "openai", model: "gpt-4.1" });
+		expect(migrated.organize).toEqual({ providerId: "", model: "" });
+	});
+
+	test("degrades garbage (wrong types, bogus providers) to empty overrides", () => {
+		const migrated = migrateTaskModels(
+			{
+				triage: 42,
+				organize: { providerId: "not-a-provider", model: 7 },
+				dashboard: null,
+			},
+			"nim",
+		);
+		expect(migrated.triage).toEqual({ providerId: "", model: "" });
+		expect(migrated.organize).toEqual({ providerId: "", model: "" });
+		expect(migrated.dashboard).toEqual({ providerId: "", model: "" });
+	});
+
+	test("returns all-empty overrides for non-object input", () => {
+		const migrated = migrateTaskModels(undefined, "anthropic");
+		expect(migrated.triage).toEqual({ providerId: "", model: "" });
+	});
+});
+
+describe("loadSettingsFromRaw", () => {
+	test("fresh install (null raw): generic defaults, no migration, no Spencer seeds", () => {
+		const result = loadSettingsFromRaw(null);
+		expect(result.migrated).toBe(false);
+		expect(result.autoApplyDisabled).toBe(false);
+		expect(result.settings.organizeExcludeFolders).toEqual(["Templates"]);
+		expect(result.settings.settingsVersion).toBe(SETTINGS_VERSION);
+	});
+
+	test("legacy data (no settingsVersion): flips a live auto-apply off, seeds exclusions, migrates task models, stamps the version", () => {
+		const result = loadSettingsFromRaw({
+			activeProvider: "nim",
+			activeModel: "moonshotai/kimi-k2.6",
+			organizeAutoApply: true,
+			taskModels: {
+				triage: "deepseek-ai/deepseek-v4-flash",
+				organize: "deepseek-ai/deepseek-v4-flash",
+				dashboard: "google/gemma-3-12b-it",
+				htmlGenerate: "",
+			},
+		});
+		expect(result.migrated).toBe(true);
+		expect(result.autoApplyDisabled).toBe(true);
+		expect(result.settings.organizeAutoApply).toBe(false);
+		expect(result.settings.organizeExcludeFolders).toEqual([
+			"02 Claude",
+			"06 Templates",
+		]);
+		expect(result.settings.taskModels.organize).toEqual({
+			providerId: "nim",
+			model: "deepseek-ai/deepseek-v4-flash",
+		});
+		expect(result.settings.settingsVersion).toBe(SETTINGS_VERSION);
+	});
+
+	test("legacy data with auto-apply already off migrates without the Notice flag", () => {
+		const result = loadSettingsFromRaw({ organizeAutoApply: false });
+		expect(result.migrated).toBe(true);
+		expect(result.autoApplyDisabled).toBe(false);
+	});
+
+	test("current-version data is not re-migrated (no Spencer seeds, no rewrite)", () => {
+		const result = loadSettingsFromRaw({
+			settingsVersion: SETTINGS_VERSION,
+			organizeAutoApply: true,
+			organizeExcludeFolders: ["Custom"],
+			taskModels: {
+				triage: { providerId: "nim", model: "x" },
+			},
+		});
+		expect(result.migrated).toBe(false);
+		expect(result.autoApplyDisabled).toBe(false);
+		// A v2 user who deliberately re-enabled auto-apply keeps it.
+		expect(result.settings.organizeAutoApply).toBe(true);
+		expect(result.settings.organizeExcludeFolders).toEqual(["Custom"]);
+		expect(result.settings.taskModels.triage).toEqual({
+			providerId: "nim",
+			model: "x",
+		});
+	});
+});
+
+describe("chatWithTaskModel provider routing", () => {
+	test("an override pinned to another provider calls THAT provider's endpoint", async () => {
+		const settings = cloneSettings();
+		settings.activeProvider = "anthropic";
+		settings.activeModel = "claude-sonnet-4-5";
+		settings.providers.anthropic.apiKey = "sk-ant-test";
+		settings.providers.nim.apiKey = "nvapi-test";
+		settings.taskModels.organize = {
+			providerId: "nim",
+			model: "deepseek-ai/deepseek-v4-flash",
+		};
+
+		setRequestUrlHandler(() => ({
+			json: { choices: [{ message: { content: "ok" } }] },
+		}));
+
+		const reply = await chatWithTaskModel(settings, "organize", [
+			{ role: "user", content: "hi" },
+		]);
+
+		expect(reply).toBe("ok");
+		expect(requestUrlCalls[0]?.url).toContain("integrate.api.nvidia.com");
+		const body = JSON.parse(requestUrlCalls[0]?.body ?? "{}");
+		expect(body.model).toBe("deepseek-ai/deepseek-v4-flash");
+	});
+
+	test("a failed override falls back to the chat model on the ACTIVE provider", async () => {
+		const settings = cloneSettings();
+		settings.activeProvider = "anthropic";
+		settings.activeModel = "claude-sonnet-4-5";
+		settings.providers.anthropic.apiKey = "sk-ant-test";
+		settings.providers.nim.apiKey = "nvapi-test";
+		settings.taskModels.triage = {
+			providerId: "nim",
+			model: "gone/does-not-exist",
+		};
+
+		setRequestUrlHandler((params) => {
+			if (params.url.includes("nvidia")) {
+				return {
+					json: { error: { message: "model not found" } },
+					status: 404,
+				};
+			}
+			return { json: { content: [{ text: "fallback answer" }] } };
+		});
+
+		const reply = await chatWithTaskModel(settings, "triage", [
+			{ role: "user", content: "hi" },
+		]);
+
+		expect(reply).toBe("fallback answer");
+		expect(requestUrlCalls[0]?.url).toContain("nvidia");
+		expect(requestUrlCalls[1]?.url).toContain("anthropic.com");
+		const fallbackBody = JSON.parse(requestUrlCalls[1]?.body ?? "{}");
+		expect(fallbackBody.model).toBe("claude-sonnet-4-5");
 	});
 });
 
@@ -55,8 +256,12 @@ describe("triage uses resolveTaskModel", () => {
 		const settings = cloneSettings();
 		settings.activeProvider = "anthropic";
 		settings.providers.anthropic.apiKey = "sk-ant-test";
+		settings.providers.nim.apiKey = "nvapi-test";
 		settings.activeModel = "claude-sonnet-4-5";
-		settings.taskModels.triage = "deepseek-ai/deepseek-v4-flash";
+		settings.taskModels.triage = {
+			providerId: "nim",
+			model: "deepseek-ai/deepseek-v4-flash",
+		};
 		settings.inboxNotes = ["00 Start/Inbox.md"];
 
 		const plugin = { app, settings } as unknown as FlintPlugin;
@@ -64,15 +269,17 @@ describe("triage uses resolveTaskModel", () => {
 
 		setRequestUrlHandler(() => ({
 			json: {
-				content: [
+				choices: [
 					{
-						text: JSON.stringify([
-							{
-								item: "buy a domain for the rocket project",
-								target: "unsorted",
-								nextStep: "buy a domain",
-							},
-						]),
+						message: {
+							content: JSON.stringify([
+								{
+									item: "buy a domain for the rocket project",
+									target: "unsorted",
+									nextStep: "buy a domain",
+								},
+							]),
+						},
 					},
 				],
 			},
@@ -82,6 +289,7 @@ describe("triage uses resolveTaskModel", () => {
 
 		const body = JSON.parse(requestUrlCalls[0]?.body ?? "{}");
 		expect(body.model).toBe("deepseek-ai/deepseek-v4-flash");
+		expect(requestUrlCalls[0]?.url).toContain("integrate.api.nvidia.com");
 	});
 
 	test("falls back to the active model when no triage override is set", async () => {

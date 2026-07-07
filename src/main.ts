@@ -36,6 +36,7 @@ import {
 	DEFAULT_SETTINGS,
 	type FlintSettings,
 	FlintSettingTab,
+	loadSettingsFromRaw,
 } from "./settings";
 import { OrganizeService } from "./triage/organize";
 import { TriageService } from "./triage/triage";
@@ -484,7 +485,20 @@ export default class FlintPlugin extends Plugin {
 	}
 
 	async loadSettings(): Promise<void> {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		// Migration decisions run on the RAW loadData() blob inside
+		// loadSettingsFromRaw — merging defaults first would stamp the current
+		// settingsVersion onto legacy data and the migration would never fire.
+		const result = loadSettingsFromRaw(await this.loadData());
+		this.settings = result.settings;
+		if (result.autoApplyDisabled) {
+			new Notice(
+				"Flint: auto-apply organize was switched OFF by this update — moves now go through review (or chat confirmation). Re-enable in settings if you really want silent filing.",
+				15000,
+			);
+		}
+		if (result.migrated) {
+			await this.saveData(this.settings);
+		}
 	}
 
 	async saveSettings(): Promise<void> {

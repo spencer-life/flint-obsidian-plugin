@@ -126,6 +126,16 @@ export class FakeTFile extends FakeTAbstractFile {
 	}
 }
 
+/** Folder stand-in so `instanceof TFolder` checks and `.children` walks in
+ * src (vault-tree.ts, organize.ts) work against fake vault trees. */
+export class FakeTFolder extends FakeTAbstractFile {
+	children: FakeTAbstractFile[] = [];
+
+	isRoot(): boolean {
+		return this.path === "/";
+	}
+}
+
 /** Simplified port of Obsidian's `normalizePath`: backslashes to slashes,
  * collapsed repeated slashes, no trailing slash, no leading "./". */
 function fakeNormalizePath(path: string): string {
@@ -225,6 +235,8 @@ mock.module("obsidian", () => ({
 	AbstractInputSuggest: FakeAbstractInputSuggest,
 	TAbstractFile: FakeTAbstractFile,
 	TFile: FakeTFile,
+	TFolder: FakeTFolder,
+	Platform: { isMobile: false, isDesktop: true },
 	normalizePath: fakeNormalizePath,
 	debounce: fakeDebounce,
 	Notice: class FakeNotice {

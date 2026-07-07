@@ -49,4 +49,33 @@ describe("buildOrganizePrompt", () => {
 		const user = messages.find((m) => m.role === "user");
 		expect(user?.content).not.toContain("Similar existing notes");
 	});
+
+	test("system prompt asks for a confidence rating and frames null as a good answer", () => {
+		const messages = buildOrganizePrompt("some capture", [], []);
+		const system = messages.find((m) => m.role === "system");
+		expect(system?.content).toContain("confidence");
+		expect(system?.content).toContain("null destination is a GOOD answer");
+	});
+
+	test("includes the filing guide as guidance, BEFORE the allowlist", () => {
+		const messages = buildOrganizePrompt(
+			"some capture",
+			["01 Projects/Site"],
+			[],
+			"Clippings about tools go to 01 Projects/Tools.",
+		);
+		const user = messages.find((m) => m.role === "user");
+		expect(user?.content).toContain("Folder conventions");
+		expect(user?.content).toContain("not instructions");
+		const guideIndex = user?.content.indexOf("Folder conventions") ?? -1;
+		const listIndex = user?.content.indexOf("Existing vault folders") ?? -1;
+		expect(guideIndex).toBeGreaterThanOrEqual(0);
+		expect(listIndex).toBeGreaterThan(guideIndex);
+	});
+
+	test("omits the guide block when no guide is given", () => {
+		const messages = buildOrganizePrompt("some capture", ["01 Projects/Site"]);
+		const user = messages.find((m) => m.role === "user");
+		expect(user?.content).not.toContain("Folder conventions");
+	});
 });

@@ -3,6 +3,8 @@ import {
 	buildOrganizeLogLine,
 	MAX_TAGS,
 	MAX_TITLE_LENGTH,
+	meetsOrganizeConfidence,
+	parseOrganizeConfidence,
 	parseOrganizeResponse,
 	resolveOrganizeDestination,
 	sanitizeOrganizeTags,
@@ -25,7 +27,18 @@ describe("parseOrganizeResponse", () => {
 			title: "Domain registrar options",
 			tags: ["website", "domains"],
 			destination: "01 Projects/Website Relaunch",
+			confidence: "low",
 		});
+	});
+
+	test("parses a self-reported confidence level", () => {
+		const raw = JSON.stringify({
+			title: "x",
+			tags: [],
+			destination: "00 Start/Ideas",
+			confidence: "High",
+		});
+		expect(parseOrganizeResponse(raw, ALLOWLIST).confidence).toBe("high");
 	});
 
 	test("parses a response wrapped in a ```json fence", () => {
@@ -88,6 +101,32 @@ describe("parseOrganizeResponse", () => {
 
 		const result = parseOrganizeResponse(raw, ALLOWLIST);
 		expect(result.destination).toBe("00 Start/Ideas");
+	});
+});
+
+describe("parseOrganizeConfidence", () => {
+	test("accepts the three levels in any casing", () => {
+		expect(parseOrganizeConfidence("high")).toBe("high");
+		expect(parseOrganizeConfidence("Medium")).toBe("medium");
+		expect(parseOrganizeConfidence(" LOW ")).toBe("low");
+	});
+
+	test("degrades missing/invalid values to low (never throws)", () => {
+		expect(parseOrganizeConfidence(undefined)).toBe("low");
+		expect(parseOrganizeConfidence(null)).toBe("low");
+		expect(parseOrganizeConfidence(0.9)).toBe("low");
+		expect(parseOrganizeConfidence("very sure")).toBe("low");
+	});
+});
+
+describe("meetsOrganizeConfidence", () => {
+	test("gates on rank order low < medium < high", () => {
+		expect(meetsOrganizeConfidence("high", "high")).toBe(true);
+		expect(meetsOrganizeConfidence("medium", "high")).toBe(false);
+		expect(meetsOrganizeConfidence("low", "high")).toBe(false);
+		expect(meetsOrganizeConfidence("medium", "medium")).toBe(true);
+		expect(meetsOrganizeConfidence("low", "medium")).toBe(false);
+		expect(meetsOrganizeConfidence("low", "low")).toBe(true);
 	});
 });
 

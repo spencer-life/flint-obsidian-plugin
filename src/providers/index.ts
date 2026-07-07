@@ -75,31 +75,47 @@ function buildProvider(
 	});
 }
 
+/** How much of a provider error message reaches a user-facing Notice. */
+const NOTICE_REASON_CHARS = 200;
+
 /**
- * Runs a background-task chat call with the task's model override, falling
- * back to the chat `activeModel` if the override fails. Guards the case
- * where a per-task model id belongs to a previously-active provider (task
- * overrides survive provider switches) — without this, a stale override
- * silently breaks the automation that depends on it. The fallback is
- * surfaced via a Notice so a misconfigured override isn't invisible.
+ * Runs a background-task chat call with the task's model override, built on
+ * the override's OWN provider (an override can outlive a provider switch),
+ * falling back to the chat `activeModel` on the active provider if the
+ * override fails. The fallback Notice names the model, the provider, and the
+ * ACTUAL error reason — a swallowed reason made real failures (rate limits,
+ * reasoning-only replies) look like "misconfigured override" for weeks.
  */
 export async function chatWithTaskModel(
 	settings: FlintSettings,
 	task: TaskModelKey,
 	messages: ChatMessage[],
 ): Promise<string> {
-	const provider = getProvider(settings);
-	const model = resolveTaskModel(settings, task);
-	if (model === settings.activeModel) {
-		return provider.chat(messages, { model });
+	const resolved = resolveTaskModel(settings, task);
+	const isActiveModel =
+		resolved.providerId === settings.activeProvider &&
+		resolved.model === settings.activeModel;
+
+	const provider = buildProvider(
+		resolved.providerId,
+		resolveConfig(resolved.providerId, settings),
+	);
+	if (isActiveModel) {
+		return provider.chat(messages, { model: resolved.model });
 	}
 	try {
-		return await provider.chat(messages, { model });
-	} catch {
+		return await provider.chat(messages, { model: resolved.model });
+	} catch (error) {
+		const reason = (
+			error instanceof Error ? error.message : String(error)
+		).slice(0, NOTICE_REASON_CHARS);
 		new Notice(
-			`Flint: task model "${model}" failed — retrying with the chat model.`,
+			`Flint: task model "${resolved.model}" (${resolved.providerId}) failed: ${reason} — retrying with the chat model.`,
+			10000,
 		);
-		return provider.chat(messages, { model: settings.activeModel });
+		return getProvider(settings).chat(messages, {
+			model: settings.activeModel,
+		});
 	}
 }
 

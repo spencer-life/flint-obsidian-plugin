@@ -5,14 +5,16 @@ import {
 	normalizePath,
 	Platform,
 	TFile,
-	TFolder,
 } from "obsidian";
+import { computeDestinationAllowlist } from "../agent/vault-tree";
 import { nextAvailablePath } from "../generate/html";
 import { isWithinFolder } from "../ingest/clip-processor";
+import { appendFlintLog } from "../log/flint-log";
 import type FlintPlugin from "../main";
 import { chatWithTaskModel } from "../providers";
 import {
 	buildOrganizeLogLine,
+	meetsOrganizeConfidence,
 	type OrganizeSuggestion,
 	parseOrganizeResponse,
 	resolveOrganizeDestination,
@@ -21,12 +23,12 @@ import { buildOrganizePrompt, type SimilarNote } from "./organize-prompt";
 
 const DEBOUNCE_MS = 1200;
 
-/** Vault-root note that receives one line per applied organize move. */
-const ORGANIZE_LOG_PATH = "Flint Log.md";
-
 /** How much of a capture's content to feed the semantic-similarity lookup —
  * capped so a huge capture doesn't blow up the retrieval query. */
 const SIMILARITY_QUERY_CHARS = 2000;
+
+/** How much of the filing-guide note reaches the prompt. */
+const FILING_GUIDE_CHARS = 2000;
 
 /** How many similar notes to surface as routing evidence. */
 const SIMILAR_NOTE_COUNT = 3;
@@ -114,34 +116,35 @@ export class OrganizeService {
 		}
 	}
 
-	/**
-	 * Builds the allowlist of real, existing vault folder paths a destination
-	 * suggestion may exactly match. Computed fresh from the live vault tree
-	 * every time (never cached, never hand-authored) so an LLM-emitted path
-	 * can never be trusted directly — only membership in this list matters.
-	 */
+	/** Live destination allowlist via the shared vault-tree helper: retrieval
+	 * exclusions ∪ organize-destination exclusions, plus the capture folder
+	 * and its subfolders. */
 	private computeDestinationAllowlist(): string[] {
-		const excluded = this.plugin.settings.excludeFolders;
-		const capture = this.captureFolder();
-		const folders: string[] = [];
+		return computeDestinationAllowlist(this.app.vault.getRoot(), {
+			excludedFolders: [
+				...this.plugin.settings.excludeFolders,
+				...this.plugin.settings.organizeExcludeFolders,
+			],
+			captureFolder: this.captureFolder(),
+		});
+	}
 
-		const isExcluded = (path: string) =>
-			excluded.some(
-				(folder) => path === folder || path.startsWith(`${folder}/`),
-			);
-
-		const walk = (folder: TFolder) => {
-			for (const child of folder.children) {
-				if (!(child instanceof TFolder)) continue;
-				if (child.path !== capture && !isExcluded(child.path)) {
-					folders.push(child.path);
-				}
-				walk(child);
-			}
-		};
-
-		walk(this.app.vault.getRoot());
-		return folders.sort();
+	/** First ~2000 chars of the configured filing-guide note, or undefined
+	 * when unset/missing/unreadable — the prompt degrades cleanly without it. */
+	private async readFilingGuide(): Promise<string | undefined> {
+		const configured = this.plugin.settings.filingGuideNote.trim();
+		if (configured.length === 0) return undefined;
+		const file = this.app.vault.getAbstractFileByPath(
+			normalizePath(configured),
+		);
+		if (!(file instanceof TFile)) return undefined;
+		try {
+			const text = await this.app.vault.cachedRead(file);
+			const trimmed = text.slice(0, FILING_GUIDE_CHARS).trim();
+			return trimmed.length > 0 ? trimmed : undefined;
+		} catch {
+			return undefined;
+		}
 	}
 
 	/** Top-k semantically similar notes to feed as routing evidence, via the
@@ -176,7 +179,8 @@ export class OrganizeService {
 		const content = await this.app.vault.cachedRead(file);
 		const allowlist = this.computeDestinationAllowlist();
 		const similar = await this.similarNotes(content);
-		const messages = buildOrganizePrompt(content, allowlist, similar);
+		const guide = await this.readFilingGuide();
+		const messages = buildOrganizePrompt(content, allowlist, similar, guide);
 
 		let suggestion: OrganizeSuggestion;
 		try {
@@ -192,12 +196,23 @@ export class OrganizeService {
 			return;
 		}
 
+		// Confidence gate: a below-threshold destination is dropped ENTIRELY —
+		// never written as `flint-suggest-dest` — because the apply path
+		// re-reads frontmatter later and would happily file a low-confidence
+		// guess it finds there. Title/tags still stand.
+		const destination = meetsOrganizeConfidence(
+			suggestion.confidence,
+			this.plugin.settings.organizeMinConfidence,
+		)
+			? suggestion.destination
+			: null;
+
 		await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
 			frontmatter["flint-organized"] = true;
 			frontmatter["flint-suggest-title"] = suggestion.title;
 			frontmatter["flint-suggest-tags"] = suggestion.tags;
-			if (suggestion.destination) {
-				frontmatter["flint-suggest-dest"] = suggestion.destination;
+			if (destination) {
+				frontmatter["flint-suggest-dest"] = destination;
 			}
 		});
 
@@ -205,7 +220,7 @@ export class OrganizeService {
 			// Apply from the suggestion in hand — the metadata cache won't have
 			// re-indexed the frontmatter written just above yet, so the
 			// cache-reading path would silently see "not organized" and no-op.
-			await this.applyResolved(file, suggestion.title, suggestion.destination);
+			await this.applyResolved(file, suggestion.title, destination);
 		}
 	}
 
@@ -283,41 +298,14 @@ export class OrganizeService {
 		}
 	}
 
-	/** Appends one line to the vault-root activity log for an applied move.
-	 * Logging is best-effort only — a failure here must never break the
-	 * filing that already happened. */
+	/** Appends one line to the vault-root activity log for an applied move
+	 * via the shared best-effort log helper. */
 	private async appendMoveLog(oldPath: string, newPath: string): Promise<void> {
-		try {
-			const timestamp = window.moment().format("YYYY-MM-DD HH:mm");
-			const line = buildOrganizeLogLine(oldPath, newPath, timestamp);
-			const existing = this.app.vault.getAbstractFileByPath(ORGANIZE_LOG_PATH);
-			if (existing instanceof TFile) {
-				await this.app.vault.process(
-					existing,
-					(data) => `${data.trimEnd()}\n${line}\n`,
-				);
-			} else if (existing === null) {
-				try {
-					await this.app.vault.create(
-						ORGANIZE_LOG_PATH,
-						`# Flint Log\n\nNotes auto-filed by Flint's organize feature (newest at the bottom).\n\n${line}\n`,
-					);
-				} catch {
-					// Create collision: a concurrent move created the log between
-					// our lookup and create. Re-resolve and append instead so this
-					// move's entry isn't lost.
-					const raced = this.app.vault.getAbstractFileByPath(ORGANIZE_LOG_PATH);
-					if (raced instanceof TFile) {
-						await this.app.vault.process(
-							raced,
-							(data) => `${data.trimEnd()}\n${line}\n`,
-						);
-					}
-				}
-			}
-		} catch {
-			// Best-effort: never let logging break an applied move.
-		}
+		const timestamp = window.moment().format("YYYY-MM-DD HH:mm");
+		await appendFlintLog(
+			this.app.vault,
+			buildOrganizeLogLine(oldPath, newPath, timestamp),
+		);
 	}
 
 	/** "Apply organize suggestions" command (active note): explicit,
@@ -367,49 +355,77 @@ export class OrganizeService {
 			return;
 		}
 
-		new OrganizeReviewModal(this.plugin, items, () => {
+		new OrganizeReviewModal(this.plugin, items, (selected) => {
 			void (async () => {
-				for (const item of items) {
+				for (const item of selected) {
 					await this.applySuggestions(item.file);
 				}
-				new Notice(`Flint: applied ${items.length} organize suggestion(s).`);
+				new Notice(`Flint: applied ${selected.length} organize suggestion(s).`);
 			})();
 		}).open();
 	}
 }
 
-/** Dry-run confirmation modal: lists every pending organize suggestion
- * before anything is moved. Shape mirrors triage's review modal. */
+/** Per-item confirmation modal: every pending suggestion gets its own
+ * checkbox (on by default), and only the checked subset is applied. Rows
+ * without a destination are dimmed — applying them only renames in place. */
 class OrganizeReviewModal extends Modal {
+	private selected: Set<OrganizeReviewItem>;
+
 	constructor(
 		plugin: FlintPlugin,
 		private items: OrganizeReviewItem[],
-		private onConfirm: () => void,
+		private onConfirm: (selected: OrganizeReviewItem[]) => void,
 	) {
 		super(plugin.app);
+		this.selected = new Set(items);
 	}
 
 	onOpen(): void {
 		const { contentEl } = this;
 		contentEl.createEl("h2", { text: "Flint: review organize suggestions" });
 
-		const list = contentEl.createEl("ul");
+		let confirmButton: HTMLButtonElement;
+		const refreshConfirmLabel = () => {
+			confirmButton.textContent = `Apply selected (${this.selected.size})`;
+			confirmButton.disabled = this.selected.size === 0;
+		};
+
+		const list = contentEl.createEl("ul", { cls: "flint-review-list" });
 		for (const item of this.items) {
 			const li = list.createEl("li");
-			li.createEl("strong", { text: item.file.basename });
-			if (item.title) li.createSpan({ text: ` → ${item.title}` });
-			if (item.destination) li.createSpan({ text: ` (${item.destination})` });
+			if (!item.destination) li.addClass("flint-review-stays");
+
+			const label = li.createEl("label");
+			const checkbox = label.createEl("input", {
+				type: "checkbox",
+			}) as HTMLInputElement;
+			checkbox.checked = true;
+			checkbox.addEventListener("change", () => {
+				if (checkbox.checked) this.selected.add(item);
+				else this.selected.delete(item);
+				refreshConfirmLabel();
+			});
+
+			label.createEl("strong", { text: ` ${item.file.basename}` });
+			if (item.title) label.createSpan({ text: ` → ${item.title}` });
+			label.createSpan({
+				text: item.destination
+					? ` (${item.destination})`
+					: " (stays in capture folder)",
+			});
 			if (item.tags.length > 0) {
 				li.createEl("div", { text: item.tags.join(", ") });
 			}
 		}
 
-		const buttons = contentEl.createDiv();
-		const confirmButton = buttons.createEl("button", { text: "Apply all" });
+		const buttons = contentEl.createDiv({ cls: "flint-review-buttons" });
+		confirmButton = buttons.createEl("button", { text: "Apply selected" });
 		confirmButton.addEventListener("click", () => {
-			this.onConfirm();
+			this.onConfirm(Array.from(this.selected));
 			this.close();
 		});
+		refreshConfirmLabel();
 
 		const cancelButton = buttons.createEl("button", { text: "Cancel" });
 		cancelButton.addEventListener("click", () => this.close());

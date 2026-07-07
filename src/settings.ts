@@ -7,6 +7,30 @@ import { ModelSuggest } from "./ui/model-suggest";
 export type ProviderId = "anthropic" | "nim" | "openai" | "ollama";
 export type Ambition = "lean" | "balanced" | "ambitious";
 export type EmbeddingProviderId = "openai" | "nim" | "ollama" | "none";
+export type OrganizeConfidence = "high" | "medium" | "low";
+
+const PROVIDER_IDS: readonly ProviderId[] = [
+	"anthropic",
+	"nim",
+	"openai",
+	"ollama",
+];
+
+export function isProviderId(value: unknown): value is ProviderId {
+	return (
+		typeof value === "string" && (PROVIDER_IDS as string[]).includes(value)
+	);
+}
+
+/**
+ * A per-task model override. `providerId: ""` means "the active provider" —
+ * a model id alone is ambiguous once overrides can outlive provider switches,
+ * which is exactly the stale-override hazard this shape removes.
+ */
+export interface TaskModelOverride {
+	providerId: ProviderId | "";
+	model: string;
+}
 
 export interface FlintSettings {
 	providers: {
@@ -36,33 +60,161 @@ export interface FlintSettings {
 	captureFolder: string;
 	organizeEnabled: boolean;
 	organizeAutoApply: boolean;
+	/** Folders excluded as ORGANIZE DESTINATIONS (distinct from the retrieval
+	 * `excludeFolders` above — both are unioned when building the allowlist). */
+	organizeExcludeFolders: string[];
+	/** Vault path of a human-authored note describing folder conventions, fed
+	 * to the organize prompt as guidance (never as instructions). */
+	filingGuideNote: string;
+	/** Minimum LLM-reported confidence required before a suggested destination
+	 * is written to frontmatter at all. */
+	organizeMinConfidence: OrganizeConfidence;
+	/** Chat panel runs the tool-calling agent loop (with per-change Apply/Skip
+	 * confirmation) instead of the read-only RAG pipeline. */
+	agentMode: boolean;
+	/** Bumped when stored data needs a one-shot migration on load. */
+	settingsVersion: number;
 	dailyFolder: string;
 	dailyAutoGenerate: boolean;
 	imageProvider: "nim" | "openai";
 	imageModel: string;
 	imageSize: string;
 	taskModels: {
-		triage: string;
-		organize: string;
-		dashboard: string;
-		htmlGenerate: string;
+		triage: TaskModelOverride;
+		organize: TaskModelOverride;
+		dashboard: TaskModelOverride;
+		htmlGenerate: TaskModelOverride;
 	};
 }
 
 /** The per-task model tasks `resolveTaskModel` knows how to look up. */
 export type TaskModelKey = keyof FlintSettings["taskModels"];
 
+/** A fully-resolved (provider, model) pair ready to build a provider from. */
+export interface ResolvedTaskModel {
+	providerId: ProviderId;
+	model: string;
+}
+
 /**
- * Per-task model override, falling back to the chat `activeModel` when the
- * task's override is empty or whitespace-only — the default, no-behavior-
- * change state until a user explicitly assigns one.
+ * Per-task model override, falling back to the chat `activeModel` on the
+ * active provider when the task's override is empty or whitespace-only — the
+ * default, no-behavior-change state until a user explicitly assigns one. An
+ * override with a model but no provider belongs to the active provider.
  */
 export function resolveTaskModel(
 	settings: FlintSettings,
 	task: TaskModelKey,
-): string {
+): ResolvedTaskModel {
 	const override = settings.taskModels[task];
-	return override.trim().length > 0 ? override : settings.activeModel;
+	const model = override.model.trim();
+	if (model.length === 0) {
+		return {
+			providerId: settings.activeProvider,
+			model: settings.activeModel,
+		};
+	}
+	return {
+		providerId:
+			override.providerId === ""
+				? settings.activeProvider
+				: override.providerId,
+		model,
+	};
+}
+
+/**
+ * Normalizes a stored `taskModels` blob of ANY vintage to the current
+ * `{providerId, model}` shape. Legacy plain-string overrides are assumed to
+ * belong to `legacyProvider` (the provider that was active when they were
+ * written — best available guess, and exactly what the old runtime did).
+ * Pure and unit-testable; never throws on garbage.
+ */
+export function migrateTaskModels(
+	raw: unknown,
+	legacyProvider: ProviderId,
+): FlintSettings["taskModels"] {
+	const result: FlintSettings["taskModels"] = {
+		triage: { providerId: "", model: "" },
+		organize: { providerId: "", model: "" },
+		dashboard: { providerId: "", model: "" },
+		htmlGenerate: { providerId: "", model: "" },
+	};
+	if (typeof raw !== "object" || raw === null) return result;
+
+	for (const key of Object.keys(result) as TaskModelKey[]) {
+		const value = (raw as Record<string, unknown>)[key];
+		if (typeof value === "string") {
+			const model = value.trim();
+			if (model.length > 0) {
+				result[key] = { providerId: legacyProvider, model };
+			}
+		} else if (typeof value === "object" && value !== null) {
+			const entry = value as Record<string, unknown>;
+			result[key] = {
+				providerId: isProviderId(entry["providerId"])
+					? entry["providerId"]
+					: "",
+				model: typeof entry["model"] === "string" ? entry["model"] : "",
+			};
+		}
+	}
+	return result;
+}
+
+/** Current `settingsVersion` written by this build. */
+export const SETTINGS_VERSION = 2;
+
+export interface SettingsLoadResult {
+	settings: FlintSettings;
+	/** True when a one-shot migration ran — the caller should `saveData` once. */
+	migrated: boolean;
+	/** True when the migration flipped a live `organizeAutoApply: true` off —
+	 * the caller should surface a one-time Notice explaining why. */
+	autoApplyDisabled: boolean;
+}
+
+/**
+ * Builds the in-memory settings from the RAW `loadData()` result. The
+ * migration decision is made on the raw blob BEFORE defaults are merged in —
+ * merging first would stamp `settingsVersion` onto legacy data and the
+ * migration would never fire. Three cases:
+ *  - `raw` null/undefined → fresh install: generic defaults, no migration.
+ *  - `raw.settingsVersion` undefined → legacy (pre-v2) data: flip a live
+ *    `organizeAutoApply: true` off, seed the organize destination exclusions
+ *    that legacy vaults were mis-filing into, normalize string task models.
+ *  - otherwise → current data: normalize task models defensively, no rewrite.
+ */
+export function loadSettingsFromRaw(raw: unknown): SettingsLoadResult {
+	const base = structuredClone(DEFAULT_SETTINGS);
+	if (raw === null || raw === undefined || typeof raw !== "object") {
+		return { settings: base, migrated: false, autoApplyDisabled: false };
+	}
+
+	const rawObj = raw as Record<string, unknown>;
+	const settings = Object.assign(base, rawObj) as FlintSettings;
+	const legacyProvider = isProviderId(rawObj["activeProvider"])
+		? rawObj["activeProvider"]
+		: DEFAULT_SETTINGS.activeProvider;
+
+	if (rawObj["settingsVersion"] === undefined) {
+		const autoApplyDisabled = rawObj["organizeAutoApply"] === true;
+		settings.organizeAutoApply = false;
+		// Spencer-specific legacy seed: existing vaults were mis-filing clips
+		// into these; fresh installs keep the generic default instead.
+		settings.organizeExcludeFolders = ["02 Claude", "06 Templates"];
+		settings.taskModels = migrateTaskModels(
+			rawObj["taskModels"],
+			legacyProvider,
+		);
+		settings.settingsVersion = SETTINGS_VERSION;
+		return { settings, migrated: true, autoApplyDisabled };
+	}
+
+	// Current-version data: still normalize the task-model shape defensively
+	// (a hand-edited or partially-synced data.json shouldn't crash resolve).
+	settings.taskModels = migrateTaskModels(rawObj["taskModels"], legacyProvider);
+	return { settings, migrated: false, autoApplyDisabled: false };
 }
 
 export const DEFAULT_SETTINGS: FlintSettings = {
@@ -93,16 +245,21 @@ export const DEFAULT_SETTINGS: FlintSettings = {
 	captureFolder: "00 Start/Inbox",
 	organizeEnabled: false,
 	organizeAutoApply: false,
+	organizeExcludeFolders: ["Templates"],
+	filingGuideNote: "Flint Filing Guide.md",
+	organizeMinConfidence: "high",
+	agentMode: true,
+	settingsVersion: SETTINGS_VERSION,
 	dailyFolder: "00 Start/Daily",
 	dailyAutoGenerate: false,
 	imageProvider: "nim",
 	imageModel: "stabilityai/stable-diffusion-3-medium",
 	imageSize: "1024x1024",
 	taskModels: {
-		triage: "",
-		organize: "",
-		dashboard: "",
-		htmlGenerate: "",
+		triage: { providerId: "", model: "" },
+		organize: { providerId: "", model: "" },
+		dashboard: { providerId: "", model: "" },
+		htmlGenerate: { providerId: "", model: "" },
 	},
 };
 
@@ -117,8 +274,6 @@ export class FlintSettingTab extends PluginSettingTab {
 	display(): void {
 		const { containerEl } = this;
 		containerEl.empty();
-
-		
 
 		new Setting(containerEl).setName("Providers").setHeading();
 
@@ -283,7 +438,7 @@ export class FlintSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl).setName("Task models").setHeading();
 		containerEl.createEl("p", {
-			text: "Optional per-task overrides. Leave empty to use the active model above. Model ids below apply to the currently active provider.",
+			text: "Optional per-task overrides. Leave the model empty to use the active model above. Each override can pin its own provider so a provider switch never strands a model id.",
 			cls: "setting-item-description",
 		});
 
@@ -292,26 +447,60 @@ export class FlintSettingTab extends PluginSettingTab {
 			desc: string,
 			task: TaskModelKey,
 		) => {
+			// Per-row model options, fetched for the row's OWN provider so the
+			// suggest list always matches where the model id will actually run.
+			let rowModelOptions: string[] = [];
+			const rowProvider = (): ProviderId =>
+				this.plugin.settings.taskModels[task].providerId ||
+				this.plugin.settings.activeProvider;
+			const fetchRowModels = () => {
+				fetchModels(rowProvider(), this.plugin.settings, {})
+					.then((models) => {
+						rowModelOptions = models;
+					})
+					.catch(() => {
+						rowModelOptions = [];
+					});
+			};
+			fetchRowModels();
+
 			new Setting(containerEl)
 				.setName(name)
 				.setDesc(desc)
+				.addDropdown((dropdown) => {
+					dropdown
+						.addOptions({
+							"": "Same as active",
+							anthropic: "Anthropic",
+							nim: "NVIDIA NIM",
+							openai: "OpenAI",
+							ollama: "Ollama",
+						})
+						.setValue(this.plugin.settings.taskModels[task].providerId)
+						.onChange(async (value) => {
+							this.plugin.settings.taskModels[task].providerId =
+								value === "" ? "" : (value as ProviderId);
+							await this.plugin.saveSettings();
+							fetchRowModels();
+						});
+				})
 				.addText((text) => {
 					new ModelSuggest(
 						this.app,
 						text.inputEl,
-						() => currentModelOptions,
+						() => rowModelOptions,
 						(value) => {
 							text.setValue(value);
-							this.plugin.settings.taskModels[task] = value;
+							this.plugin.settings.taskModels[task].model = value;
 							void this.plugin.saveSettings();
 						},
 					);
 
 					text
 						.setPlaceholder("same as chat")
-						.setValue(this.plugin.settings.taskModels[task])
+						.setValue(this.plugin.settings.taskModels[task].model)
 						.onChange(async (value) => {
-							this.plugin.settings.taskModels[task] = value;
+							this.plugin.settings.taskModels[task].model = value;
 							await this.plugin.saveSettings();
 						});
 				});
@@ -687,6 +876,59 @@ export class FlintSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.organizeAutoApply)
 					.onChange(async (value) => {
 						this.plugin.settings.organizeAutoApply = value;
+						await this.plugin.saveSettings();
+					});
+			});
+
+		new Setting(containerEl)
+			.setName("Destination exclusions")
+			.setDesc(
+				"Comma-separated folders never offered as filing destinations (on top of the retrieval exclusions above).",
+			)
+			.addText((text) => {
+				text
+					.setPlaceholder("Templates")
+					.setValue(this.plugin.settings.organizeExcludeFolders.join(", "))
+					.onChange(async (value) => {
+						this.plugin.settings.organizeExcludeFolders = value
+							.split(",")
+							.map((folder) => folder.trim())
+							.filter((folder) => folder.length > 0);
+						await this.plugin.saveSettings();
+					});
+			});
+
+		new Setting(containerEl)
+			.setName("Filing guide note")
+			.setDesc(
+				"Vault path of a note describing your folder conventions. Fed to the organize model as guidance; leave empty to skip.",
+			)
+			.addText((text) => {
+				text
+					.setPlaceholder("Flint Filing Guide.md")
+					.setValue(this.plugin.settings.filingGuideNote)
+					.onChange(async (value) => {
+						this.plugin.settings.filingGuideNote = value.trim();
+						await this.plugin.saveSettings();
+					});
+			});
+
+		new Setting(containerEl)
+			.setName("Minimum filing confidence")
+			.setDesc(
+				"Destination suggestions below this self-reported confidence are dropped (the note just stays put).",
+			)
+			.addDropdown((dropdown) => {
+				dropdown
+					.addOptions({
+						high: "High (strict)",
+						medium: "Medium",
+						low: "Low (accept everything)",
+					})
+					.setValue(this.plugin.settings.organizeMinConfidence)
+					.onChange(async (value) => {
+						this.plugin.settings.organizeMinConfidence =
+							value as OrganizeConfidence;
 						await this.plugin.saveSettings();
 					});
 			});
