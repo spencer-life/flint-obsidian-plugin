@@ -40,6 +40,7 @@ import {
 } from "./settings";
 import { OrganizeService } from "./triage/organize";
 import { TriageService } from "./triage/triage";
+import { FLINT_ICON_ID, registerFlintIcon } from "./ui/icon";
 import { FlintView, VIEW_TYPE_FLINT } from "./view";
 
 export default class FlintPlugin extends Plugin {
@@ -60,6 +61,7 @@ export default class FlintPlugin extends Plugin {
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
+		registerFlintIcon();
 
 		this.vaultIndex = new VaultIndex(
 			this.app,
@@ -73,7 +75,7 @@ export default class FlintPlugin extends Plugin {
 
 		this.registerView(VIEW_TYPE_FLINT, (leaf) => new FlintView(leaf, this));
 
-		this.addRibbonIcon("flame", "Open Flint", () => {
+		this.addRibbonIcon(FLINT_ICON_ID, "Open Flint", () => {
 			void this.activateView();
 		});
 

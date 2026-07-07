@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import type FlintPlugin from "./main";
 import { FlintContext } from "./react/context";
 import { FlintPanel } from "./react/FlintPanel";
+import { FLINT_ICON_ID } from "./ui/icon";
 
 export const VIEW_TYPE_FLINT = "flint-view";
 
@@ -25,7 +26,7 @@ export class FlintView extends ItemView {
 	}
 
 	getIcon(): string {
-		return "flame";
+		return FLINT_ICON_ID;
 	}
 
 	async onOpen(): Promise<void> {

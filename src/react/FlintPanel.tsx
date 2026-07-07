@@ -24,6 +24,7 @@ import type { ProviderId } from "../settings";
 import { ModelSuggest } from "../ui/model-suggest";
 import { NotePickerModal } from "../ui/note-picker";
 import { useApp, usePlugin } from "./context";
+import { Suggestions } from "./Suggestions";
 import { ToolCard, type ToolCardState } from "./ToolCard";
 
 // Soft cap on how many notes can be attached as references at once, so the
@@ -767,9 +768,7 @@ export function FlintPanel() {
 
 			<div className="flint-messages" ref={listRef}>
 				{messages.length === 0 && (
-					<div className="flint-empty">
-						Ask your vault something to get started.
-					</div>
+					<Suggestions onSeed={(text) => setInput(text)} />
 				)}
 				{messages.map((m) => (
 					<div
