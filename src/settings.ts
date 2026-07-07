@@ -276,6 +276,10 @@ export class FlintSettingTab extends PluginSettingTab {
 		containerEl.empty();
 
 		new Setting(containerEl).setName("Providers").setHeading();
+		containerEl.createEl("p", {
+			text: "API keys are stored unencrypted in this vault's plugin data (data.json). Don't sync or share the vault folder with anyone you wouldn't hand the keys to.",
+			cls: "setting-item-description",
+		});
 
 		new Setting(containerEl)
 			.setName("Anthropic API key")
