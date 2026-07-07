@@ -1,8 +1,22 @@
 import { requestUrl } from "obsidian";
 import { consumeSSEStream } from "./sse";
-import type { ChatMessage, ChatOptions, Provider, TokenHandler } from "./types";
+import type {
+	AgentMessage,
+	AssistantTurn,
+	ChatMessage,
+	ChatOptions,
+	ContentPart,
+	Provider,
+	TokenHandler,
+	ToolCall,
+	ToolDefinition,
+} from "./types";
+import { ToolsUnsupportedError } from "./types";
 
 export const NIM_BASE_URL = "https://integrate.api.nvidia.com/v1";
+
+/** How much of an HTTP error body reaches a thrown message. */
+const ERROR_BODY_CHARS = 300;
 
 export interface OpenAICompatibleConfig {
 	baseUrl: string;
@@ -48,6 +62,159 @@ export function validateBaseUrl(url: string): void {
 	);
 }
 
+type OpenAIContentPart =
+	| { type: "text"; text: string }
+	| { type: "image_url"; image_url: { url: string } };
+
+/** Multimodal ChatMessage content → OpenAI content-part array. A plain
+ * string passes through UNCHANGED so text-only request bodies stay
+ * byte-identical to the pre-tools builds (regression-tested). */
+function toOpenAIContent(
+	content: string | ContentPart[],
+): string | OpenAIContentPart[] {
+	if (typeof content === "string") return content;
+	return content.map(
+		(part): OpenAIContentPart =>
+			part.type === "text"
+				? { type: "text", text: part.text }
+				: {
+						type: "image_url",
+						image_url: {
+							url: `data:${part.mimeType};base64,${part.base64}`,
+						},
+					},
+	);
+}
+
+interface OpenAIToolCallPayload {
+	id: string;
+	type: "function";
+	function: { name: string; arguments: string };
+}
+
+type OpenAIMessage =
+	| {
+			role: "system" | "user" | "assistant";
+			content: string | OpenAIContentPart[];
+	  }
+	| {
+			role: "assistant";
+			content: string | null;
+			tool_calls: OpenAIToolCallPayload[];
+	  }
+	| { role: "tool"; tool_call_id: string; content: string };
+
+/** Converts a provider-neutral agent transcript to OpenAI messages. */
+function toOpenAIAgentMessages(messages: AgentMessage[]): OpenAIMessage[] {
+	return messages.map((message): OpenAIMessage => {
+		if (message.role === "tool") {
+			return {
+				role: "tool",
+				tool_call_id: message.toolCallId,
+				// OpenAI has no is_error flag — the framing text carries it.
+				content: message.content,
+			};
+		}
+		if (message.role === "assistant" && "toolCalls" in message) {
+			return {
+				role: "assistant",
+				content: message.content.length > 0 ? message.content : null,
+				tool_calls: message.toolCalls.map((call) => ({
+					id: call.id,
+					type: "function",
+					function: { name: call.name, arguments: call.arguments },
+				})),
+			};
+		}
+		return { role: message.role, content: toOpenAIContent(message.content) };
+	});
+}
+
+function toOpenAITools(tools: ToolDefinition[]): unknown[] {
+	return tools.map((tool) => ({
+		type: "function",
+		function: {
+			name: tool.name,
+			description: tool.description,
+			parameters: tool.parameters,
+		},
+	}));
+}
+
+/** True when an error status+body reads as "this endpoint/model rejects
+ * tool definitions" (e.g. a NIM model without function calling) rather than
+ * a transient failure. */
+function looksToolsUnsupported(status: number, bodyText: string): boolean {
+	return (
+		(status === 400 || status === 404 || status === 422) &&
+		/tool|function.?call/i.test(bodyText)
+	);
+}
+
+function extractErrorMessage(bodyText: string): string {
+	try {
+		const parsed = JSON.parse(bodyText) as {
+			error?: { message?: string };
+			detail?: string;
+			message?: string;
+		};
+		return (
+			parsed.error?.message ??
+			parsed.detail ??
+			parsed.message ??
+			bodyText.slice(0, ERROR_BODY_CHARS)
+		);
+	} catch {
+		return bodyText.slice(0, ERROR_BODY_CHARS);
+	}
+}
+
+/** Raw streamed `delta.tool_calls` fragment: OpenAI splits one call's id/
+ * name/argument JSON across many chunks, keyed by array index. */
+interface ToolCallFragment {
+	index?: number;
+	id?: string;
+	function?: { name?: string; arguments?: string };
+}
+
+/** Accumulates streamed tool-call fragments (keyed by index) into whole calls. */
+export class ToolCallAssembler {
+	private fragments = new Map<
+		number,
+		{ id: string; name: string; arguments: string }
+	>();
+
+	push(fragment: ToolCallFragment): void {
+		const index = fragment.index ?? 0;
+		const existing = this.fragments.get(index) ?? {
+			id: "",
+			name: "",
+			arguments: "",
+		};
+		if (typeof fragment.id === "string" && fragment.id.length > 0) {
+			existing.id = fragment.id;
+		}
+		if (typeof fragment.function?.name === "string") {
+			existing.name += fragment.function.name;
+		}
+		if (typeof fragment.function?.arguments === "string") {
+			existing.arguments += fragment.function.arguments;
+		}
+		this.fragments.set(index, existing);
+	}
+
+	finish(): ToolCall[] {
+		return Array.from(this.fragments.entries())
+			.sort(([a], [b]) => a - b)
+			.map(([index, fragment]) => ({
+				id: fragment.id || `call_${index}`,
+				name: fragment.name,
+				arguments: fragment.arguments,
+			}))
+			.filter((call) => call.name.length > 0);
+	}
+}
+
 /**
  * Provider adapter for any OpenAI-compatible `/chat/completions` endpoint
  * (NVIDIA NIM, Ollama, OpenAI itself).
@@ -68,7 +235,10 @@ export class OpenAICompatibleProvider implements Provider {
 			},
 			body: JSON.stringify({
 				model: opts.model,
-				messages,
+				messages: messages.map((message) => ({
+					role: message.role,
+					content: toOpenAIContent(message.content),
+				})),
 				max_tokens: opts.maxTokens,
 			}),
 			throw: false,
@@ -107,6 +277,77 @@ export class OpenAICompatibleProvider implements Provider {
 			);
 		}
 		throw new Error(`Model "${opts.model}" returned an empty response.`);
+	}
+
+	async chatWithTools(
+		messages: AgentMessage[],
+		tools: ToolDefinition[],
+		opts: ChatOptions,
+	): Promise<AssistantTurn> {
+		validateBaseUrl(this.config.baseUrl);
+		const response = await requestUrl({
+			url: `${this.config.baseUrl}/chat/completions`,
+			method: "POST",
+			headers: {
+				Authorization: `Bearer ${this.config.apiKey}`,
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify({
+				model: opts.model,
+				messages: toOpenAIAgentMessages(messages),
+				max_tokens: opts.maxTokens,
+				...(tools.length > 0 ? { tools: toOpenAITools(tools) } : {}),
+			}),
+			throw: false,
+		});
+
+		const data = response.json as
+			| {
+					choices?: {
+						message?: {
+							content?: string | null;
+							tool_calls?: {
+								id?: string;
+								function?: { name?: string; arguments?: string };
+							}[];
+						};
+					}[];
+					error?: { message?: string };
+					detail?: string;
+					message?: string;
+			  }
+			| undefined;
+
+		if (response.status >= 400) {
+			const apiMsg =
+				data?.error?.message ?? data?.detail ?? data?.message ?? "";
+			if (looksToolsUnsupported(response.status, apiMsg)) {
+				throw new ToolsUnsupportedError(
+					`Model "${opts.model}" rejected tool definitions: ${apiMsg}`,
+				);
+			}
+			throw new Error(
+				`Provider error (${response.status})${apiMsg ? `: ${apiMsg}` : ""}`,
+			);
+		}
+
+		const message = data?.choices?.[0]?.message;
+		const toolCalls: ToolCall[] = [];
+		let counter = 0;
+		for (const call of message?.tool_calls ?? []) {
+			if (typeof call.function?.name !== "string") continue;
+			counter += 1;
+			toolCalls.push({
+				id:
+					typeof call.id === "string" && call.id ? call.id : `call_${counter}`,
+				name: call.function.name,
+				arguments: call.function.arguments ?? "",
+			});
+		}
+		return {
+			text: typeof message?.content === "string" ? message.content : "",
+			toolCalls,
+		};
 	}
 
 	async listModels(): Promise<string[]> {
@@ -160,7 +401,10 @@ export class OpenAICompatibleProvider implements Provider {
 				},
 				body: JSON.stringify({
 					model: opts.model,
-					messages,
+					messages: messages.map((message) => ({
+						role: message.role,
+						content: toOpenAIContent(message.content),
+					})),
 					max_tokens: opts.maxTokens,
 					stream: true,
 				}),
@@ -168,10 +412,12 @@ export class OpenAICompatibleProvider implements Provider {
 			});
 
 			if (!response.ok) {
-				// Deliberately don't include the response body in the thrown
-				// message: it can contain provider-specific error detail we don't
-				// want surfacing verbatim in a user-facing Notice.
-				throw new Error(`Request failed: ${response.status}`);
+				// Read the body for an honest reason (it's consumed either way);
+				// truncated so provider detail can't flood a user-facing Notice.
+				const bodyText = await response.text().catch(() => "");
+				throw new Error(
+					`Request failed: ${response.status}${bodyText ? ` — ${extractErrorMessage(bodyText)}` : ""}`,
+				);
 			}
 
 			let full = "";
@@ -207,6 +453,89 @@ export class OpenAICompatibleProvider implements Provider {
 			const full = await this.chat(messages, opts);
 			onToken(full);
 			return full;
+		}
+	}
+
+	async streamChatWithTools(
+		messages: AgentMessage[],
+		tools: ToolDefinition[],
+		opts: ChatOptions,
+		onToken: TokenHandler,
+	): Promise<AssistantTurn> {
+		validateBaseUrl(this.config.baseUrl);
+		try {
+			const response = await fetch(`${this.config.baseUrl}/chat/completions`, {
+				method: "POST",
+				headers: {
+					Authorization: `Bearer ${this.config.apiKey}`,
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify({
+					model: opts.model,
+					messages: toOpenAIAgentMessages(messages),
+					max_tokens: opts.maxTokens,
+					...(tools.length > 0 ? { tools: toOpenAITools(tools) } : {}),
+					stream: true,
+				}),
+				signal: opts.signal,
+			});
+
+			if (!response.ok) {
+				// The tools-unsupported decision NEEDS the body — the old
+				// status-only throw hid exactly this signal (NIM answers 400
+				// with a tools message for non-function-calling models).
+				const bodyText = await response.text().catch(() => "");
+				if (looksToolsUnsupported(response.status, bodyText)) {
+					throw new ToolsUnsupportedError(
+						`Model "${opts.model}" rejected tool definitions: ${extractErrorMessage(bodyText)}`,
+					);
+				}
+				throw new Error(
+					`Request failed: ${response.status}${bodyText ? ` — ${extractErrorMessage(bodyText)}` : ""}`,
+				);
+			}
+
+			let text = "";
+			const assembler = new ToolCallAssembler();
+
+			await consumeSSEStream(
+				response,
+				(data) => {
+					if (data === "[DONE]") return;
+					let event: unknown;
+					try {
+						event = JSON.parse(data);
+					} catch {
+						return;
+					}
+					if (typeof event !== "object" || event === null) return;
+					const parsed = event as {
+						choices?: {
+							delta?: {
+								content?: string;
+								tool_calls?: ToolCallFragment[];
+							};
+						}[];
+					};
+					const delta = parsed.choices?.[0]?.delta;
+					if (!delta) return;
+					if (typeof delta.content === "string" && delta.content.length > 0) {
+						text += delta.content;
+						onToken(delta.content);
+					}
+					for (const fragment of delta.tool_calls ?? []) {
+						assembler.push(fragment);
+					}
+				},
+				opts.signal,
+			);
+
+			return { text, toolCalls: assembler.finish() };
+		} catch (err) {
+			if (err instanceof DOMException && err.name === "AbortError") throw err;
+			if (err instanceof ToolsUnsupportedError) throw err;
+			// Fetch/CORS or stream-parse failure — retry non-streaming.
+			return this.chatWithTools(messages, tools, opts);
 		}
 	}
 }

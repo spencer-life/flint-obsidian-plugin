@@ -219,3 +219,221 @@
 	box-shadow: none;
 	background: transparent;
 }
+
+/* --- Flint identity accent (Catppuccin mauve, with flamingo/blue support) --- */
+.flint-view {
+	--flint-accent: #ca9ee6;
+	--flint-accent-soft: rgba(202, 158, 230, 0.14);
+	--flint-flamingo: #eebebe;
+	--flint-blue: #8caaee;
+}
+
+.flint-title {
+	color: var(--flint-accent);
+}
+
+.flint-send:hover,
+.flint-tool-apply:hover {
+	background: var(--flint-accent);
+	color: var(--background-primary);
+}
+
+/* --- Agent mode toggle --- */
+.flint-agent-toggle {
+	appearance: none;
+	-webkit-appearance: none;
+	height: 1.75rem;
+	line-height: 1.75rem;
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	background: var(--background-primary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 999px;
+	padding: 0 var(--size-4-2);
+	cursor: pointer;
+	flex: 0 0 auto;
+}
+
+.flint-agent-toggle.flint-agent-on {
+	color: var(--flint-accent);
+	border-color: var(--flint-accent);
+	background: var(--flint-accent-soft);
+}
+
+/* --- Tool cards (mutating calls) --- */
+.flint-tool-card {
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-m);
+	padding: var(--size-4-2);
+	margin: var(--size-4-1) 0;
+	background: var(--background-secondary);
+	font-size: var(--font-ui-smaller);
+}
+
+.flint-tool-card:hover {
+	border-color: var(--flint-accent);
+}
+
+.flint-tool-awaiting {
+	border-color: var(--flint-accent);
+	box-shadow: 0 0 0 1px var(--flint-accent-soft);
+}
+
+.flint-tool-card-header {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: var(--size-4-2);
+}
+
+.flint-tool-card-summary {
+	font-weight: 600;
+	overflow-wrap: anywhere;
+}
+
+.flint-tool-card-status {
+	color: var(--text-muted);
+	flex: 0 0 auto;
+}
+
+.flint-tool-applied .flint-tool-card-status {
+	color: var(--text-success);
+}
+
+.flint-tool-error .flint-tool-card-status,
+.flint-tool-capped .flint-tool-card-status {
+	color: var(--text-error);
+}
+
+.flint-tool-card-detail {
+	margin: var(--size-4-1) 0 0;
+	padding: var(--size-4-1) var(--size-4-2);
+	background: var(--background-primary);
+	border-radius: var(--radius-s);
+	max-height: 12rem;
+	overflow: auto;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	font-size: var(--font-ui-smaller);
+}
+
+.flint-tool-card-actions {
+	display: flex;
+	gap: var(--size-4-2);
+	margin-top: var(--size-4-2);
+}
+
+.flint-tool-apply,
+.flint-tool-skip {
+	cursor: pointer;
+	border-radius: var(--radius-s);
+	font-size: var(--font-ui-smaller);
+	padding: var(--size-4-1) var(--size-4-3);
+}
+
+.flint-tool-apply {
+	border: 1px solid var(--flint-accent);
+	color: var(--flint-accent);
+	background: transparent;
+}
+
+.flint-tool-card-result {
+	margin-top: var(--size-4-1);
+	color: var(--text-muted);
+	overflow-wrap: anywhere;
+}
+
+/* --- Read-only tool chips --- */
+.flint-tool-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--size-4-1);
+	font-size: var(--font-ui-smaller);
+	color: var(--text-muted);
+	background: var(--background-modifier-border);
+	border-radius: 999px;
+	padding: 2px var(--size-4-2);
+	margin: 2px var(--size-4-1) 2px 0;
+}
+
+.flint-tool-chip.flint-tool-error {
+	color: var(--text-error);
+}
+
+/* --- Image attachments --- */
+.flint-image-chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--size-4-1);
+	margin-top: var(--size-4-1);
+}
+
+.flint-image-chip {
+	position: relative;
+	display: inline-flex;
+	align-items: flex-start;
+	gap: var(--size-4-1);
+}
+
+.flint-image-thumb {
+	max-width: 96px;
+	max-height: 96px;
+	border-radius: var(--radius-s);
+	border: 1px solid var(--background-modifier-border);
+}
+
+/* --- Bulk review modal --- */
+.flint-review-list {
+	list-style: none;
+	padding-left: 0;
+}
+
+.flint-review-list li {
+	margin-bottom: var(--size-4-1);
+}
+
+.flint-review-stays {
+	opacity: 0.6;
+}
+
+.flint-review-buttons {
+	display: flex;
+	gap: var(--size-4-2);
+	margin-top: var(--size-4-3);
+}
+
+/* --- Suggestion cards (empty state) --- */
+.flint-suggestions {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-4-2);
+	margin-top: var(--size-4-4);
+}
+
+.flint-suggestion-card {
+	all: unset;
+	box-sizing: border-box;
+	display: block;
+	width: 100%;
+	cursor: pointer;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-m);
+	padding: var(--size-4-2) var(--size-4-3);
+	background: var(--background-secondary);
+}
+
+.flint-suggestion-card:hover {
+	border-color: var(--flint-accent);
+	background: var(--flint-accent-soft);
+}
+
+.flint-suggestion-title {
+	font-weight: 600;
+	font-size: var(--font-ui-small);
+}
+
+.flint-suggestion-desc {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	margin-top: 2px;
+}

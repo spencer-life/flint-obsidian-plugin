@@ -65,10 +65,11 @@ describe("buildOrganizePrompt", () => {
 			"Clippings about tools go to 01 Projects/Tools.",
 		);
 		const user = messages.find((m) => m.role === "user");
-		expect(user?.content).toContain("Folder conventions");
-		expect(user?.content).toContain("not instructions");
-		const guideIndex = user?.content.indexOf("Folder conventions") ?? -1;
-		const listIndex = user?.content.indexOf("Existing vault folders") ?? -1;
+		const text = typeof user?.content === "string" ? user.content : "";
+		expect(text).toContain("Folder conventions");
+		expect(text).toContain("not instructions");
+		const guideIndex = text.indexOf("Folder conventions");
+		const listIndex = text.indexOf("Existing vault folders");
 		expect(guideIndex).toBeGreaterThanOrEqual(0);
 		expect(listIndex).toBeGreaterThan(guideIndex);
 	});

@@ -1,17 +1,52 @@
-import { Component, MarkdownRenderer, type TFile } from "obsidian";
+import {
+	arrayBufferToBase64,
+	Component,
+	MarkdownRenderer,
+	Notice,
+	normalizePath,
+	TFile,
+} from "obsidian";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { runAgentLoop } from "../agent/loop";
+import { buildAgentSystemPrompt } from "../agent/system-prompt";
+import { TOOL_DEFINITIONS } from "../agent/tool-schemas";
+import { VaultToolExecutor } from "../agent/vault-tools";
+import { renderFolderTree } from "../agent/vault-tree";
 import { neutralizeRemoteImageMarkdown, runPipeline } from "../chat/pipeline";
 import { fetchModels, getProvider } from "../providers";
-import type { ChatMessage } from "../providers/types";
+import type {
+	AgentMessage,
+	ChatMessage,
+	ContentPart,
+} from "../providers/types";
+import { ToolsUnsupportedError } from "../providers/types";
 import type { ProviderId } from "../settings";
 import { ModelSuggest } from "../ui/model-suggest";
 import { NotePickerModal } from "../ui/note-picker";
 import { useApp, usePlugin } from "./context";
+import { ToolCard, type ToolCardState } from "./ToolCard";
 
 // Soft cap on how many notes can be attached as references at once, so the
 // pinned-notes section in the system prompt (each capped at ~4000 chars in
 // the pipeline) can't grow unbounded.
 const MAX_ATTACHMENTS = 5;
+
+// Pasted/attached image caps: count per message and bytes per image.
+const MAX_IMAGES = 3;
+const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
+
+// Folder-tree caps for the agent system prompt (computed per send).
+const AGENT_TREE_DEPTH = 4;
+const AGENT_TREE_ENTRIES = 150;
+
+// Filing-guide excerpt cap in the agent system prompt.
+const AGENT_GUIDE_CHARS = 2000;
+
+// Cap on the pretty-printed proposal body inside a tool card.
+const TOOL_DETAIL_CHARS = 1500;
+
+// Cap on the result preview line under a finished tool card.
+const TOOL_PREVIEW_CHARS = 200;
 
 // Protocol-relative (`//host/...`) or absolute http(s) URL.
 const REMOTE_URL_PATTERN = /^(?:https?:)?\/\//i;
@@ -53,10 +88,28 @@ function scrubRemoteEmbeds(root: HTMLElement): void {
 	}
 }
 
+/** One rendered part of an assistant message in agent mode: streamed text
+ * or a tool invocation card. */
+type MessagePart =
+	| { type: "text"; text: string }
+	| { type: "tool"; tool: ToolCardState };
+
+/** An image attached to the outgoing message (pasted or picked). */
+interface ImageAttachment {
+	name: string;
+	mimeType: string;
+	base64: string;
+}
+
 interface FlintMessage {
 	id: string;
 	role: "user" | "assistant";
 	content: string;
+	/** Agent-mode assistant messages render from parts (text + tool cards);
+	 * `content` still carries the final text for history/fallback. */
+	parts?: MessagePart[];
+	/** Thumbnails for images the user sent with this message. */
+	images?: ImageAttachment[];
 	citations?: string[];
 	isError?: boolean;
 }
@@ -69,10 +122,28 @@ function nextId(): string {
 
 function describeError(err: unknown): string {
 	const message = err instanceof Error ? err.message : String(err);
+	if (/image|vision|multimodal|multi-modal/i.test(message)) {
+		return `This model can't read images — try a vision-capable model. (${message})`;
+	}
 	if (/\b404\b/.test(message)) {
 		return `Model not found (404) — check the model id. Some provider models are deprecated or renamed. (${message})`;
 	}
 	return message;
+}
+
+/** Pretty proposal body for a tool card from the raw argument JSON — plain
+ * text only, capped. Falls back to the raw string when unparseable. */
+function toolDetail(rawArguments: string): string | undefined {
+	if (rawArguments.trim().length === 0) return undefined;
+	let text: string;
+	try {
+		text = JSON.stringify(JSON.parse(rawArguments), null, 2);
+	} catch {
+		text = rawArguments;
+	}
+	return text.length > TOOL_DETAIL_CHARS
+		? `${text.slice(0, TOOL_DETAIL_CHARS)}\n[truncated]`
+		: text;
 }
 
 function AssistantMarkdown({ content }: { content: string }) {
@@ -152,17 +223,37 @@ export function FlintPanel() {
 	>("idle");
 	const [testMessage, setTestMessage] = useState("");
 	const [attachments, setAttachments] = useState<TFile[]>([]);
+	const [imageAttachments, setImageAttachments] = useState<ImageAttachment[]>(
+		[],
+	);
+	const [agentMode, setAgentMode] = useState(plugin.settings.agentMode);
 
 	const abortRef = useRef<AbortController | null>(null);
 	const listRef = useRef<HTMLDivElement>(null);
 	const modelInputRef = useRef<HTMLInputElement>(null);
 	const modelOptionsRef = useRef<string[]>(modelOptions);
 	const modelSuggestRef = useRef<ModelSuggest | null>(null);
+	// Full provider-facing agent transcript across turns (system prompt is
+	// prepended fresh on every send, so it's never stored here).
+	const agentTranscriptRef = useRef<AgentMessage[]>([]);
+	// Resolvers for tool confirmations currently awaiting an Apply/Skip click.
+	const confirmResolversRef = useRef(
+		new Map<string, (decision: "apply" | "skip") => void>(),
+	);
 
 	useEffect(() => {
 		const el = listRef.current;
 		if (el) el.scrollTop = el.scrollHeight;
 	}, [messages]);
+
+	// Leak guard: closing the view aborts any in-flight agent run, which also
+	// unblocks a suspended confirmation (the loop races confirm vs. abort).
+	useEffect(() => {
+		return () => {
+			abortRef.current?.abort();
+			confirmResolversRef.current.clear();
+		};
+	}, []);
 
 	useEffect(() => {
 		modelOptionsRef.current = modelOptions;
@@ -283,11 +374,267 @@ export function FlintPanel() {
 		setAttachments((prev) => prev.filter((f) => f.path !== path));
 	}, []);
 
+	const updateAgentMode = useCallback(
+		(value: boolean) => {
+			setAgentMode(value);
+			plugin.settings.agentMode = value;
+			void plugin.saveSettings();
+		},
+		[plugin],
+	);
+
+	const addImageFiles = useCallback(async (files: File[]) => {
+		for (const file of files) {
+			if (!file.type.startsWith("image/")) continue;
+			if (file.size > MAX_IMAGE_BYTES) {
+				new Notice("Flint: image too large (4 MB max).");
+				continue;
+			}
+			const buffer = await file.arrayBuffer();
+			const base64 = arrayBufferToBase64(buffer);
+			setImageAttachments((prev) =>
+				prev.length >= MAX_IMAGES
+					? prev
+					: [
+							...prev,
+							{
+								name: file.name || "pasted image",
+								mimeType: file.type,
+								base64,
+							},
+						],
+			);
+		}
+	}, []);
+
+	const handlePaste = useCallback(
+		(event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+			if (!agentMode) return;
+			const files = Array.from(event.clipboardData?.files ?? []).filter(
+				(file) => file.type.startsWith("image/"),
+			);
+			if (files.length === 0) return;
+			event.preventDefault();
+			void addImageFiles(files);
+		},
+		[agentMode, addImageFiles],
+	);
+
+	const handleRemoveImage = useCallback((index: number) => {
+		setImageAttachments((prev) => prev.filter((_, i) => i !== index));
+	}, []);
+
+	/** Apply/Skip click → resolve the loop's suspended confirmation. */
+	const handleToolDecision = useCallback(
+		(callId: string, decision: "apply" | "skip") => {
+			const resolve = confirmResolversRef.current.get(callId);
+			if (!resolve) return;
+			confirmResolversRef.current.delete(callId);
+			resolve(decision);
+		},
+		[],
+	);
+
+	/** Streams/patches the assistant message with `id` through `patch`. */
+	const patchAssistant = useCallback(
+		(id: string, patch: (message: FlintMessage) => FlintMessage) => {
+			setMessages((prev) => prev.map((m) => (m.id === id ? patch(m) : m)));
+		},
+		[],
+	);
+
+	/** Patches one tool card (by call id) inside the assistant message. */
+	const patchToolCard = useCallback(
+		(
+			assistantId: string,
+			callId: string,
+			patch: (tool: ToolCardState) => ToolCardState,
+		) => {
+			patchAssistant(assistantId, (message) => ({
+				...message,
+				parts: (message.parts ?? []).map((part) =>
+					part.type === "tool" && part.tool.callId === callId
+						? { ...part, tool: patch(part.tool) }
+						: part,
+				),
+			}));
+		},
+		[patchAssistant],
+	);
+
+	/** Agent-mode send: system prompt with the live folder tree, the full
+	 * multi-turn tool transcript, and per-change Apply/Skip confirmation. */
+	const sendAgent = useCallback(
+		async (
+			query: string,
+			images: ImageAttachment[],
+			assistantId: string,
+			controller: AbortController,
+		) => {
+			const settings = plugin.settings;
+			const folderTree = renderFolderTree(app.vault.getRoot(), {
+				maxDepth: AGENT_TREE_DEPTH,
+				maxEntries: AGENT_TREE_ENTRIES,
+			});
+
+			let filingGuide: string | undefined;
+			const guidePath = settings.filingGuideNote.trim();
+			if (guidePath.length > 0) {
+				const guideFile = app.vault.getAbstractFileByPath(
+					normalizePath(guidePath),
+				);
+				if (guideFile instanceof TFile) {
+					try {
+						filingGuide = (await app.vault.cachedRead(guideFile))
+							.slice(0, AGENT_GUIDE_CHARS)
+							.trim();
+					} catch {
+						// Unreadable guide — the prompt degrades cleanly without it.
+					}
+				}
+			}
+
+			const userContent: string | ContentPart[] =
+				images.length > 0
+					? [
+							...(query.length > 0
+								? [{ type: "text", text: query } as ContentPart]
+								: []),
+							...images.map(
+								(image): ContentPart => ({
+									type: "image",
+									mimeType: image.mimeType,
+									base64: image.base64,
+								}),
+							),
+						]
+					: query;
+
+			const userAgentMessage: AgentMessage = {
+				role: "user",
+				content: userContent,
+			};
+			const transcript: AgentMessage[] = [
+				{
+					role: "system",
+					content: buildAgentSystemPrompt({
+						folderTree,
+						filingGuide,
+						settings,
+					}),
+				},
+				...agentTranscriptRef.current,
+				userAgentMessage,
+			];
+
+			const executor = new VaultToolExecutor(app, settings, plugin.vaultIndex);
+
+			const appendPart = (part: MessagePart) => {
+				patchAssistant(assistantId, (message) => ({
+					...message,
+					parts: [...(message.parts ?? []), part],
+				}));
+			};
+
+			const result = await runAgentLoop({
+				provider: getProvider(settings),
+				model: settings.activeModel,
+				messages: transcript,
+				tools: TOOL_DEFINITIONS,
+				executor,
+				stream: settings.streamResponses,
+				signal: controller.signal,
+				events: {
+					onToken: (token) => {
+						patchAssistant(assistantId, (message) => {
+							const parts = [...(message.parts ?? [])];
+							const last = parts[parts.length - 1];
+							if (last?.type === "text") {
+								parts[parts.length - 1] = {
+									type: "text",
+									text: last.text + token,
+								};
+							} else {
+								parts.push({ type: "text", text: token });
+							}
+							return { ...message, parts };
+						});
+					},
+					onToolCall: (call, mutating) => {
+						appendPart({
+							type: "tool",
+							tool: {
+								callId: call.id,
+								name: call.name,
+								summary: executor.describeCall(
+									call.name,
+									(() => {
+										try {
+											return JSON.parse(call.arguments) as Record<
+												string,
+												unknown
+											>;
+										} catch {
+											return {};
+										}
+									})(),
+								),
+								detail: mutating ? toolDetail(call.arguments) : undefined,
+								mutating,
+								status: mutating ? "awaiting" : "running",
+							},
+						});
+					},
+					requestConfirmation: (call) =>
+						new Promise((resolve) => {
+							confirmResolversRef.current.set(call.id, resolve);
+						}),
+					onToolResult: (call, result, status) => {
+						confirmResolversRef.current.delete(call.id);
+						patchToolCard(assistantId, call.id, (tool) => ({
+							...tool,
+							status:
+								status === "skipped"
+									? "skipped"
+									: status === "capped"
+										? "capped"
+										: result.isError
+											? "error"
+											: tool.mutating
+												? "applied"
+												: "done",
+							resultPreview:
+								result.content.length > TOOL_PREVIEW_CHARS
+									? `${result.content.slice(0, TOOL_PREVIEW_CHARS)}…`
+									: result.content,
+						}));
+					},
+				},
+			});
+
+			// Persist the turn for multi-turn context (system prompt excluded —
+			// it's rebuilt fresh, with a live tree, on every send).
+			agentTranscriptRef.current = [
+				...agentTranscriptRef.current,
+				userAgentMessage,
+				...result.appended,
+			];
+
+			patchAssistant(assistantId, (message) => ({
+				...message,
+				content: result.text,
+			}));
+		},
+		[app, plugin, patchAssistant, patchToolCard],
+	);
+
 	const handleSend = useCallback(async () => {
 		const query = input.trim();
-		if (!query || isSending) return;
+		const images = imageAttachments;
+		if ((!query && images.length === 0) || isSending) return;
 
 		setInput("");
+		setImageAttachments([]);
 		setError(null);
 
 		const history: ChatMessage[] = messages
@@ -298,12 +645,14 @@ export function FlintPanel() {
 			id: nextId(),
 			role: "user",
 			content: query,
+			...(images.length > 0 ? { images } : {}),
 		};
 		const assistantId = nextId();
 		const assistantMessage: FlintMessage = {
 			id: assistantId,
 			role: "assistant",
 			content: "",
+			...(agentMode ? { parts: [] } : {}),
 		};
 
 		setMessages((prev) => [...prev, userMessage, assistantMessage]);
@@ -313,6 +662,25 @@ export function FlintPanel() {
 		abortRef.current = controller;
 
 		try {
+			if (agentMode) {
+				try {
+					await sendAgent(query, images, assistantId, controller);
+					return;
+				} catch (err) {
+					if (!(err instanceof ToolsUnsupportedError)) throw err;
+					// Model can't do tools — tell the user once and degrade to the
+					// read-only RAG pipeline for this send.
+					new Notice(
+						`Flint: ${plugin.settings.activeModel} doesn't support tools — answering read-only. Pick a function-calling model for agent mode.`,
+						8000,
+					);
+					patchAssistant(assistantId, (message) => ({
+						...message,
+						parts: undefined,
+					}));
+				}
+			}
+
 			const result = await runPipeline(
 				query,
 				plugin.settings,
@@ -355,7 +723,7 @@ export function FlintPanel() {
 				setMessages((prev) =>
 					prev.map((m) =>
 						m.id === assistantId
-							? { ...m, content: message, isError: true }
+							? { ...m, content: message, isError: true, parts: undefined }
 							: m,
 					),
 				);
@@ -364,7 +732,18 @@ export function FlintPanel() {
 			setIsSending(false);
 			abortRef.current = null;
 		}
-	}, [input, isSending, messages, plugin, attachments, app]);
+	}, [
+		input,
+		imageAttachments,
+		isSending,
+		messages,
+		plugin,
+		attachments,
+		app,
+		agentMode,
+		sendAgent,
+		patchAssistant,
+	]);
 
 	return (
 		<div className="flint-panel">
@@ -398,9 +777,45 @@ export function FlintPanel() {
 						className={`flint-message flint-message-${m.role}${m.isError ? " flint-message-error" : ""}`}
 					>
 						{m.role === "assistant" ? (
-							<AssistantMarkdown content={m.content || "…"} />
+							m.parts ? (
+								<div className="flint-parts">
+									{m.parts.length === 0 && <div>…</div>}
+									{m.parts.map((part, index) =>
+										part.type === "text" ? (
+											<AssistantMarkdown
+												// biome-ignore lint/suspicious/noArrayIndexKey: parts are append-only within a message.
+												key={`${m.id}-part-${index}`}
+												content={part.text}
+											/>
+										) : (
+											<ToolCard
+												key={part.tool.callId}
+												tool={part.tool}
+												onDecide={handleToolDecision}
+											/>
+										),
+									)}
+								</div>
+							) : (
+								<AssistantMarkdown content={m.content || "…"} />
+							)
 						) : (
-							<div className="flint-user-text">{m.content}</div>
+							<div className="flint-user-text">
+								{m.content}
+								{m.images && m.images.length > 0 && (
+									<div className="flint-image-chips">
+										{m.images.map((image, index) => (
+											<img
+												// biome-ignore lint/suspicious/noArrayIndexKey: images are immutable per message.
+												key={`${m.id}-img-${index}`}
+												className="flint-image-thumb"
+												src={`data:${image.mimeType};base64,${image.base64}`}
+												alt={image.name}
+											/>
+										))}
+									</div>
+								)}
+							</div>
 						)}
 						{m.citations && m.citations.length > 0 && (
 							<Citations paths={m.citations} />
@@ -412,6 +827,31 @@ export function FlintPanel() {
 			{error && <div className="flint-error">{error}</div>}
 
 			<div className="flint-composer">
+				{imageAttachments.length > 0 && (
+					<div className="flint-image-chips">
+						{imageAttachments.map((image, index) => (
+							<span
+								// biome-ignore lint/suspicious/noArrayIndexKey: chips track a small reorder-free list.
+								key={`pending-img-${index}`}
+								className="flint-image-chip"
+							>
+								<img
+									className="flint-image-thumb"
+									src={`data:${image.mimeType};base64,${image.base64}`}
+									alt={image.name}
+								/>
+								<button
+									type="button"
+									className="flint-attachment-remove"
+									onClick={() => handleRemoveImage(index)}
+									aria-label={`Remove ${image.name}`}
+								>
+									×
+								</button>
+							</span>
+						))}
+					</div>
+				)}
 				{attachments.length > 0 && (
 					<div className="flint-attachments">
 						{attachments.map((file) => (
@@ -443,6 +883,18 @@ export function FlintPanel() {
 						}
 					>
 						+
+					</button>
+					<button
+						type="button"
+						className={`flint-agent-toggle${agentMode ? " flint-agent-on" : ""}`}
+						onClick={() => updateAgentMode(!agentMode)}
+						title={
+							agentMode
+								? "Agent mode: Flint can read and (with your approval) modify notes"
+								: "Read-only mode: Flint answers from vault excerpts"
+						}
+					>
+						Agent
 					</button>
 					<select
 						className="flint-provider-select"
@@ -491,6 +943,7 @@ export function FlintPanel() {
 						placeholder="Ask your vault..."
 						value={input}
 						onChange={(event) => setInput(event.target.value)}
+						onPaste={handlePaste}
 						onKeyDown={(event) => {
 							if (event.key === "Enter" && !event.shiftKey) {
 								event.preventDefault();
@@ -508,7 +961,7 @@ export function FlintPanel() {
 							type="button"
 							className="flint-send"
 							onClick={() => void handleSend()}
-							disabled={!input.trim()}
+							disabled={!input.trim() && imageAttachments.length === 0}
 						>
 							Send
 						</button>

@@ -89,6 +89,10 @@ export function createFakeApp(
 				throw new Error(`Unknown fake file: ${file.path}`);
 			return found;
 		},
+		createFolder: async (path: string) => {
+			if (foldersByPath.has(path)) throw new Error(`Folder exists: ${path}`);
+			return ensureFolder(path);
+		},
 		create: async (path: string, content: string) => {
 			if (tFiles.has(path) || foldersByPath.has(path)) {
 				throw new Error(`File already exists: ${path}`);
