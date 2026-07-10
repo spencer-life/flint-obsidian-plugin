@@ -11,7 +11,7 @@ import type {
 	ToolCall,
 	ToolDefinition,
 } from "./types";
-import { ToolsUnsupportedError } from "./types";
+import { ReasoningOnlyError, ToolsUnsupportedError } from "./types";
 
 export const NIM_BASE_URL = "https://integrate.api.nvidia.com/v1";
 
@@ -151,6 +151,40 @@ function looksToolsUnsupported(status: number, bodyText: string): boolean {
 	);
 }
 
+/** Extra request-body fields + behavior overrides needed to work around
+ * NIM-hosted DeepSeek v4's model-side quirks (opencode #24264, NVIDIA forum
+ * #368085): the request must carry `chat_template_kwargs` to avoid hanging,
+ * and streamed tool calls are unreliable so tool-calling turns run
+ * non-streaming instead. Scoped to NIM specifically — an Ollama/OpenAI-hosted
+ * DeepSeek must not get NIM's kwargs. */
+interface NimDeepseekQuirks {
+	extraBody: Record<string, unknown>;
+	forceNonStreamingTools: true;
+}
+
+function nimDeepseekQuirks(
+	baseUrl: string,
+	model: string,
+): NimDeepseekQuirks | null {
+	if (baseUrl !== NIM_BASE_URL) return null;
+	if (!model.toLowerCase().startsWith("deepseek-ai/deepseek-v4")) return null;
+	return {
+		extraBody: {
+			chat_template_kwargs: { enable_thinking: true, thinking: true },
+		},
+		forceNonStreamingTools: true,
+	};
+}
+
+/** Single-sourced message for a response that carried only reasoning tokens
+ * and no usable answer text — used by both the non-streaming guard and the
+ * streaming parsers. */
+function reasoningOnlyError(model: string): ReasoningOnlyError {
+	return new ReasoningOnlyError(
+		`Model "${model}" returned only reasoning tokens and no answer text — try a standard chat model (e.g. meta/llama-3.3-70b-instruct).`,
+	);
+}
+
 function extractErrorMessage(bodyText: string): string {
 	try {
 		const parsed = JSON.parse(bodyText) as {
@@ -226,6 +260,7 @@ export class OpenAICompatibleProvider implements Provider {
 
 	async chat(messages: ChatMessage[], opts: ChatOptions): Promise<string> {
 		validateBaseUrl(this.config.baseUrl);
+		const quirks = nimDeepseekQuirks(this.config.baseUrl, opts.model);
 		const response = await requestUrl({
 			url: `${this.config.baseUrl}/chat/completions`,
 			method: "POST",
@@ -240,6 +275,7 @@ export class OpenAICompatibleProvider implements Provider {
 					content: toOpenAIContent(message.content),
 				})),
 				max_tokens: opts.maxTokens,
+				...(quirks?.extraBody ?? {}),
 			}),
 			throw: false,
 		});
@@ -267,9 +303,7 @@ export class OpenAICompatibleProvider implements Provider {
 
 		// 200 OK but no usable text — surface WHY instead of crashing on undefined.
 		if (data?.choices?.[0]?.message?.reasoning_content) {
-			throw new Error(
-				`Model "${opts.model}" returned only reasoning tokens and no answer text — try a standard chat model (e.g. meta/llama-3.3-70b-instruct).`,
-			);
+			throw reasoningOnlyError(opts.model);
 		}
 		if (!data?.choices?.length) {
 			throw new Error(
@@ -285,6 +319,7 @@ export class OpenAICompatibleProvider implements Provider {
 		opts: ChatOptions,
 	): Promise<AssistantTurn> {
 		validateBaseUrl(this.config.baseUrl);
+		const quirks = nimDeepseekQuirks(this.config.baseUrl, opts.model);
 		const response = await requestUrl({
 			url: `${this.config.baseUrl}/chat/completions`,
 			method: "POST",
@@ -297,6 +332,7 @@ export class OpenAICompatibleProvider implements Provider {
 				messages: toOpenAIAgentMessages(messages),
 				max_tokens: opts.maxTokens,
 				...(tools.length > 0 ? { tools: toOpenAITools(tools) } : {}),
+				...(quirks?.extraBody ?? {}),
 			}),
 			throw: false,
 		});
@@ -392,6 +428,7 @@ export class OpenAICompatibleProvider implements Provider {
 		onToken: TokenHandler,
 	): Promise<string> {
 		validateBaseUrl(this.config.baseUrl);
+		const quirks = nimDeepseekQuirks(this.config.baseUrl, opts.model);
 		try {
 			const response = await fetch(`${this.config.baseUrl}/chat/completions`, {
 				method: "POST",
@@ -407,6 +444,7 @@ export class OpenAICompatibleProvider implements Provider {
 					})),
 					max_tokens: opts.maxTokens,
 					stream: true,
+					...(quirks?.extraBody ?? {}),
 				}),
 				signal: opts.signal,
 			});
@@ -421,6 +459,7 @@ export class OpenAICompatibleProvider implements Provider {
 			}
 
 			let full = "";
+			let sawReasoning = false;
 
 			await consumeSSEStream(
 				response,
@@ -434,20 +473,34 @@ export class OpenAICompatibleProvider implements Provider {
 					}
 					if (typeof event !== "object" || event === null) return;
 					const parsed = event as {
-						choices?: { delta?: { content?: string } }[];
+						choices?: {
+							delta?: { content?: string; reasoning_content?: string };
+						}[];
 					};
-					const token = parsed.choices?.[0]?.delta?.content;
+					const delta = parsed.choices?.[0]?.delta;
+					const token = delta?.content;
 					if (typeof token === "string" && token.length > 0) {
 						full += token;
 						onToken(token);
+					}
+					if (
+						typeof delta?.reasoning_content === "string" &&
+						delta.reasoning_content.length > 0
+					) {
+						sawReasoning = true;
 					}
 				},
 				opts.signal,
 			);
 
+			if (full.length === 0 && sawReasoning) {
+				throw reasoningOnlyError(opts.model);
+			}
+
 			return full;
 		} catch (err) {
 			if (err instanceof DOMException && err.name === "AbortError") throw err;
+			if (err instanceof ReasoningOnlyError) throw err;
 			// Fetch/CORS failure — fall back to the guaranteed non-streaming path
 			// and deliver the whole answer at once.
 			const full = await this.chat(messages, opts);
@@ -463,6 +516,15 @@ export class OpenAICompatibleProvider implements Provider {
 		onToken: TokenHandler,
 	): Promise<AssistantTurn> {
 		validateBaseUrl(this.config.baseUrl);
+		const quirks = nimDeepseekQuirks(this.config.baseUrl, opts.model);
+		if (quirks?.forceNonStreamingTools) {
+			// NIM's DeepSeek v4 streaming tool calls are unreliable model-side
+			// (NVIDIA forum #368085) — delegate to the guaranteed non-streaming
+			// path and deliver the whole answer through one onToken call.
+			const turn = await this.chatWithTools(messages, tools, opts);
+			if (turn.text.length > 0) onToken(turn.text);
+			return turn;
+		}
 		try {
 			const response = await fetch(`${this.config.baseUrl}/chat/completions`, {
 				method: "POST",
@@ -496,6 +558,7 @@ export class OpenAICompatibleProvider implements Provider {
 			}
 
 			let text = "";
+			let sawReasoning = false;
 			const assembler = new ToolCallAssembler();
 
 			await consumeSSEStream(
@@ -513,6 +576,7 @@ export class OpenAICompatibleProvider implements Provider {
 						choices?: {
 							delta?: {
 								content?: string;
+								reasoning_content?: string;
 								tool_calls?: ToolCallFragment[];
 							};
 						}[];
@@ -523,6 +587,12 @@ export class OpenAICompatibleProvider implements Provider {
 						text += delta.content;
 						onToken(delta.content);
 					}
+					if (
+						typeof delta.reasoning_content === "string" &&
+						delta.reasoning_content.length > 0
+					) {
+						sawReasoning = true;
+					}
 					for (const fragment of delta.tool_calls ?? []) {
 						assembler.push(fragment);
 					}
@@ -530,10 +600,16 @@ export class OpenAICompatibleProvider implements Provider {
 				opts.signal,
 			);
 
-			return { text, toolCalls: assembler.finish() };
+			const toolCalls = assembler.finish();
+			if (text.length === 0 && toolCalls.length === 0 && sawReasoning) {
+				throw reasoningOnlyError(opts.model);
+			}
+
+			return { text, toolCalls };
 		} catch (err) {
 			if (err instanceof DOMException && err.name === "AbortError") throw err;
 			if (err instanceof ToolsUnsupportedError) throw err;
+			if (err instanceof ReasoningOnlyError) throw err;
 			// Fetch/CORS or stream-parse failure — retry non-streaming.
 			return this.chatWithTools(messages, tools, opts);
 		}

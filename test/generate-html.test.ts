@@ -22,7 +22,7 @@ describe("buildHtmlPagePrompt", () => {
 
 	test("system message asks for a self-contained document with no fences", () => {
 		const messages = buildHtmlPagePrompt("Title", "Body");
-		const system = messages[0]?.content ?? "";
+		const system = String(messages[0]?.content ?? "");
 
 		expect(system).toContain("self-contained");
 		expect(system.toLowerCase()).toContain("inline");

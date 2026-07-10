@@ -163,7 +163,7 @@ export function migrateTaskModels(
 }
 
 /** Current `settingsVersion` written by this build. */
-export const SETTINGS_VERSION = 2;
+export const SETTINGS_VERSION = 3;
 
 export interface SettingsLoadResult {
 	settings: FlintSettings;
@@ -178,12 +178,13 @@ export interface SettingsLoadResult {
  * Builds the in-memory settings from the RAW `loadData()` result. The
  * migration decision is made on the raw blob BEFORE defaults are merged in —
  * merging first would stamp `settingsVersion` onto legacy data and the
- * migration would never fire. Three cases:
+ * migration would never fire.
  *  - `raw` null/undefined → fresh install: generic defaults, no migration.
- *  - `raw.settingsVersion` undefined → legacy (pre-v2) data: flip a live
- *    `organizeAutoApply: true` off, seed the organize destination exclusions
- *    that legacy vaults were mis-filing into, normalize string task models.
- *  - otherwise → current data: normalize task models defensively, no rewrite.
+ *  - otherwise → numeric version stepping: each `if (version < N)` block runs
+ *    every migration between the stored version and current, in order, so a
+ *    vault that skipped versions (e.g. syncing after an update) still gets
+ *    every step. Task models are always renormalized defensively (a
+ *    hand-edited or partially-synced data.json shouldn't crash resolve).
  */
 export function loadSettingsFromRaw(raw: unknown): SettingsLoadResult {
 	const base = structuredClone(DEFAULT_SETTINGS);
@@ -196,25 +197,43 @@ export function loadSettingsFromRaw(raw: unknown): SettingsLoadResult {
 	const legacyProvider = isProviderId(rawObj["activeProvider"])
 		? rawObj["activeProvider"]
 		: DEFAULT_SETTINGS.activeProvider;
+	const version =
+		typeof rawObj["settingsVersion"] === "number"
+			? rawObj["settingsVersion"]
+			: 0;
 
-	if (rawObj["settingsVersion"] === undefined) {
-		const autoApplyDisabled = rawObj["organizeAutoApply"] === true;
+	let migrated = false;
+	let autoApplyDisabled = false;
+
+	// v1 -> v2: flip a live `organizeAutoApply: true` off, seed the organize
+	// destination exclusions that legacy vaults were mis-filing into.
+	if (version < 2) {
+		autoApplyDisabled = rawObj["organizeAutoApply"] === true;
 		settings.organizeAutoApply = false;
 		// Spencer-specific legacy seed: existing vaults were mis-filing clips
 		// into these; fresh installs keep the generic default instead.
 		settings.organizeExcludeFolders = ["02 Claude", "06 Templates"];
-		settings.taskModels = migrateTaskModels(
-			rawObj["taskModels"],
-			legacyProvider,
-		);
-		settings.settingsVersion = SETTINGS_VERSION;
-		return { settings, migrated: true, autoApplyDisabled };
+		migrated = true;
 	}
 
-	// Current-version data: still normalize the task-model shape defensively
-	// (a hand-edited or partially-synced data.json shouldn't crash resolve).
+	// v2 -> v3: NIM's deepseek-v4-pro needs provider quirks (request kwargs,
+	// non-streamed tool calls) to work at all — switch the chat model to a
+	// tool-capable model with full streaming support instead. Task
+	// models (e.g. deepseek-v4-flash triage/organize) are untouched: they
+	// run non-streaming and work fine once the request-body quirk ships.
+	if (version < 3) {
+		if (
+			rawObj["activeProvider"] === "nim" &&
+			rawObj["activeModel"] === "deepseek-ai/deepseek-v4-pro"
+		) {
+			settings.activeModel = "moonshotai/kimi-k2.6";
+		}
+		migrated = true;
+	}
+
 	settings.taskModels = migrateTaskModels(rawObj["taskModels"], legacyProvider);
-	return { settings, migrated: false, autoApplyDisabled: false };
+	settings.settingsVersion = SETTINGS_VERSION;
+	return { settings, migrated, autoApplyDisabled };
 }
 
 export const DEFAULT_SETTINGS: FlintSettings = {
@@ -512,12 +531,12 @@ export class FlintSettingTab extends PluginSettingTab {
 
 		addTaskModelSetting(
 			"Triage model",
-			"Suggested: deepseek-ai/deepseek-v4-flash (fast, strong JSON/instruction following)",
+			"Suggested: moonshotai/kimi-k2.6 (fast, strong JSON/instruction following)",
 			"triage",
 		);
 		addTaskModelSetting(
 			"Auto-organize model",
-			"Suggested: deepseek-ai/deepseek-v4-flash (fast, strong JSON/instruction following)",
+			"Suggested: moonshotai/kimi-k2.6 (fast, strong JSON/instruction following)",
 			"organize",
 		);
 		addTaskModelSetting(

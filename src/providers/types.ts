@@ -65,6 +65,17 @@ export class ToolsUnsupportedError extends Error {
 	}
 }
 
+/** Thrown when a streaming response carried only `reasoning_content` and no
+ * usable answer text or tool calls — mirrors the non-streaming guard in
+ * `chat()`, re-thrown before the non-streaming fallback so a slow reasoning
+ * model isn't re-run just to fail again the same way. */
+export class ReasoningOnlyError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "ReasoningOnlyError";
+	}
+}
+
 export interface ChatOptions {
 	model: string;
 	maxTokens?: number;

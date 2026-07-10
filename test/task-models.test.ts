@@ -183,6 +183,65 @@ describe("loadSettingsFromRaw", () => {
 			model: "x",
 		});
 	});
+
+	describe("v2 -> v3: NIM deepseek-v4-pro chat model rewrite", () => {
+		test("rewrites activeModel to kimi-k2.6 for nim + deepseek-v4-pro at v2", () => {
+			const result = loadSettingsFromRaw({
+				settingsVersion: 2,
+				activeProvider: "nim",
+				activeModel: "deepseek-ai/deepseek-v4-pro",
+			});
+			expect(result.settings.activeModel).toBe("moonshotai/kimi-k2.6");
+			expect(result.settings.settingsVersion).toBe(SETTINGS_VERSION);
+			expect(result.migrated).toBe(true);
+		});
+
+		test("leaves a different NIM model untouched", () => {
+			const result = loadSettingsFromRaw({
+				settingsVersion: 2,
+				activeProvider: "nim",
+				activeModel: "google/gemma-3-12b-it",
+			});
+			expect(result.settings.activeModel).toBe("google/gemma-3-12b-it");
+			expect(result.settings.settingsVersion).toBe(SETTINGS_VERSION);
+		});
+
+		test("leaves deepseek-v4-pro on a non-NIM provider untouched", () => {
+			const result = loadSettingsFromRaw({
+				settingsVersion: 2,
+				activeProvider: "ollama",
+				activeModel: "deepseek-ai/deepseek-v4-pro",
+			});
+			expect(result.settings.activeModel).toBe("deepseek-ai/deepseek-v4-pro");
+			expect(result.settings.settingsVersion).toBe(SETTINGS_VERSION);
+		});
+
+		test("leaves task models untouched by the chat-model rewrite", () => {
+			const result = loadSettingsFromRaw({
+				settingsVersion: 2,
+				activeProvider: "nim",
+				activeModel: "deepseek-ai/deepseek-v4-pro",
+				taskModels: {
+					triage: { providerId: "nim", model: "deepseek-ai/deepseek-v4-flash" },
+				},
+			});
+			expect(result.settings.activeModel).toBe("moonshotai/kimi-k2.6");
+			expect(result.settings.taskModels.triage).toEqual({
+				providerId: "nim",
+				model: "deepseek-ai/deepseek-v4-flash",
+			});
+		});
+
+		test("already-v3 data with nim + deepseek-v4-pro is NOT re-migrated (rewrite is one-shot, not a standing guard)", () => {
+			const result = loadSettingsFromRaw({
+				settingsVersion: SETTINGS_VERSION,
+				activeProvider: "nim",
+				activeModel: "deepseek-ai/deepseek-v4-pro",
+			});
+			expect(result.settings.activeModel).toBe("deepseek-ai/deepseek-v4-pro");
+			expect(result.migrated).toBe(false);
+		});
+	});
 });
 
 describe("chatWithTaskModel provider routing", () => {

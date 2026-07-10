@@ -7,10 +7,11 @@ import {
 } from "./obsidian-mock";
 
 const { AnthropicProvider } = await import("../src/providers/anthropic");
-const { OpenAICompatibleProvider, ToolCallAssembler } = await import(
-	"../src/providers/openai-compatible"
+const { OpenAICompatibleProvider, ToolCallAssembler, NIM_BASE_URL } =
+	await import("../src/providers/openai-compatible");
+const { ToolsUnsupportedError, ReasoningOnlyError } = await import(
+	"../src/providers/types"
 );
-const { ToolsUnsupportedError } = await import("../src/providers/types");
 
 import type { AgentMessage, ToolDefinition } from "../src/providers/types";
 
@@ -397,13 +398,14 @@ describe("openai-compatible chatWithTools", () => {
 			baseUrl: "https://integrate.api.nvidia.com/v1",
 			apiKey: "nvapi-test",
 		});
-		setFetch(async () =>
-			new Response(
-				JSON.stringify({
-					error: { message: "This model does not support tools." },
-				}),
-				{ status: 400 },
-			),
+		setFetch(
+			async () =>
+				new Response(
+					JSON.stringify({
+						error: { message: "This model does not support tools." },
+					}),
+					{ status: 400 },
+				),
 		);
 
 		await expect(
@@ -436,6 +438,141 @@ describe("openai-compatible chatWithTools", () => {
 		);
 
 		expect(turn.text).toBe("fallback");
+	});
+});
+
+describe("reasoning-only streams and NIM DeepSeek quirks", () => {
+	test("streamChat: reasoning-only SSE stream throws ReasoningOnlyError, no fallback request", async () => {
+		const provider = new OpenAICompatibleProvider({
+			baseUrl: "https://integrate.api.nvidia.com/v1",
+			apiKey: "nvapi-test",
+		});
+		setFetch(async () =>
+			sseResponse([
+				JSON.stringify({
+					choices: [{ delta: { reasoning_content: "thinking..." } }],
+				}),
+				JSON.stringify({
+					choices: [{ delta: { reasoning_content: " more thinking" } }],
+				}),
+				"[DONE]",
+			]),
+		);
+
+		await expect(
+			provider.streamChat(
+				[{ role: "user", content: "hi" }],
+				{ model: "deepseek-ai/deepseek-v4-pro" },
+				() => {},
+			),
+		).rejects.toBeInstanceOf(ReasoningOnlyError);
+		expect(requestUrlCalls).toHaveLength(0);
+	});
+
+	test("streamChat: mixed reasoning_content + content resolves to the content only", async () => {
+		const provider = new OpenAICompatibleProvider({
+			baseUrl: "https://integrate.api.nvidia.com/v1",
+			apiKey: "nvapi-test",
+		});
+		setFetch(async () =>
+			sseResponse([
+				JSON.stringify({
+					choices: [{ delta: { reasoning_content: "thinking..." } }],
+				}),
+				JSON.stringify({ choices: [{ delta: { content: "the answer" } }] }),
+				"[DONE]",
+			]),
+		);
+
+		const tokens: string[] = [];
+		const result = await provider.streamChat(
+			[{ role: "user", content: "hi" }],
+			{ model: "moonshotai/kimi-k2.6" },
+			(token) => tokens.push(token),
+		);
+
+		expect(result).toBe("the answer");
+		expect(tokens.join("")).toBe("the answer");
+	});
+
+	test("streamChatWithTools: non-deepseek reasoning-only stream throws ReasoningOnlyError, no fallback request", async () => {
+		const provider = new OpenAICompatibleProvider({
+			baseUrl: "https://integrate.api.nvidia.com/v1",
+			apiKey: "nvapi-test",
+		});
+		setFetch(async () =>
+			sseResponse([
+				JSON.stringify({
+					choices: [{ delta: { reasoning_content: "thinking..." } }],
+				}),
+				"[DONE]",
+			]),
+		);
+
+		await expect(
+			provider.streamChatWithTools(
+				[{ role: "user", content: "hi" }],
+				TOOLS,
+				{ model: "moonshotai/kimi-k2.6" },
+				() => {},
+			),
+		).rejects.toBeInstanceOf(ReasoningOnlyError);
+		expect(requestUrlCalls).toHaveLength(0);
+	});
+
+	test("streamChatWithTools: NIM + deepseek-v4 goes through requestUrl (non-streaming), not fetch", async () => {
+		const provider = new OpenAICompatibleProvider({
+			baseUrl: NIM_BASE_URL,
+			apiKey: "nvapi-test",
+		});
+		let fetchCalled = false;
+		setFetch(async () => {
+			fetchCalled = true;
+			throw new Error("fetch should not be called for NIM deepseek-v4 tools");
+		});
+		setRequestUrlHandler(() => ({
+			json: {
+				choices: [
+					{
+						message: {
+							content: "final answer",
+							tool_calls: [
+								{
+									id: "call_1",
+									function: {
+										name: "read_note",
+										arguments: '{"path":"A.md"}',
+									},
+								},
+							],
+						},
+					},
+				],
+			},
+		}));
+
+		const tokens: string[] = [];
+		const turn = await provider.streamChatWithTools(
+			[{ role: "user", content: "read A" }],
+			TOOLS,
+			{ model: "deepseek-ai/deepseek-v4-pro" },
+			(token) => tokens.push(token),
+		);
+
+		expect(fetchCalled).toBe(false);
+		expect(requestUrlCalls).toHaveLength(1);
+		expect(requestUrlCalls[0]?.url).toBe(`${NIM_BASE_URL}/chat/completions`);
+		const body = JSON.parse(requestUrlCalls[0]?.body ?? "{}");
+		expect(body.stream).toBeUndefined();
+		expect(body.chat_template_kwargs).toEqual({
+			enable_thinking: true,
+			thinking: true,
+		});
+		expect(tokens).toEqual(["final answer"]);
+		expect(turn.text).toBe("final answer");
+		expect(turn.toolCalls).toEqual([
+			{ id: "call_1", name: "read_note", arguments: '{"path":"A.md"}' },
+		]);
 	});
 });
 

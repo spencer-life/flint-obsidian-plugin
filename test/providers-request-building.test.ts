@@ -122,6 +122,62 @@ describe("OpenAICompatibleProvider.chat request building", () => {
 	});
 });
 
+describe("NIM DeepSeek v4 quirks: chat_template_kwargs", () => {
+	test("present for NIM + deepseek-ai/deepseek-v4-pro", async () => {
+		setRequestUrlHandler(() => ({
+			json: { choices: [{ message: { content: "hi" } }] },
+		}));
+		const provider = new OpenAICompatibleProvider({
+			baseUrl: NIM_BASE_URL,
+			apiKey: "nvapi-test",
+		});
+
+		await provider.chat([{ role: "user", content: "hi" }], {
+			model: "deepseek-ai/deepseek-v4-pro",
+		});
+
+		const body = JSON.parse(requestUrlCalls[0]?.body ?? "{}");
+		expect(body.chat_template_kwargs).toEqual({
+			enable_thinking: true,
+			thinking: true,
+		});
+	});
+
+	test("absent for NIM + a different model", async () => {
+		setRequestUrlHandler(() => ({
+			json: { choices: [{ message: { content: "hi" } }] },
+		}));
+		const provider = new OpenAICompatibleProvider({
+			baseUrl: NIM_BASE_URL,
+			apiKey: "nvapi-test",
+		});
+
+		await provider.chat([{ role: "user", content: "hi" }], {
+			model: "moonshotai/kimi-k2.6",
+		});
+
+		const body = JSON.parse(requestUrlCalls[0]?.body ?? "{}");
+		expect(body.chat_template_kwargs).toBeUndefined();
+	});
+
+	test("absent for Ollama + a deepseek-v4 model id (NIM-scoped only)", async () => {
+		setRequestUrlHandler(() => ({
+			json: { choices: [{ message: { content: "hi" } }] },
+		}));
+		const provider = new OpenAICompatibleProvider({
+			baseUrl: "http://localhost:11434/v1",
+			apiKey: "ollama",
+		});
+
+		await provider.chat([{ role: "user", content: "hi" }], {
+			model: "deepseek-ai/deepseek-v4-pro",
+		});
+
+		const body = JSON.parse(requestUrlCalls[0]?.body ?? "{}");
+		expect(body.chat_template_kwargs).toBeUndefined();
+	});
+});
+
 describe("validateBaseUrl", () => {
 	test("accepts a well-formed https URL", () => {
 		expect(() => validateBaseUrl("https://api.openai.com/v1")).not.toThrow();
