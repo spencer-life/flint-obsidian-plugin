@@ -16,6 +16,9 @@ const MAX_ITERATIONS = 8;
 /** Hard cap on APPLIED mutations per user send. */
 const MAX_MUTATIONS = 10;
 
+/** Response headroom for agent turns (tool-call JSON + prose can run long). */
+const AGENT_MAX_TOKENS = 4096;
+
 /** Cap on a tool result's length inside the transcript (it's replayed on
  * every following model call this session). */
 const TOOL_RESULT_CHARS = 2000;
@@ -54,6 +57,8 @@ export interface AgentLoopOptions {
 		): Promise<ToolExecutionResult>;
 	};
 	stream: boolean;
+	/** Advanced sampling overrides (from settings), forwarded as-is. */
+	sampling?: Pick<ChatOptions, "temperature" | "topP" | "seed">;
 	signal?: AbortSignal;
 	events: AgentEvents;
 }
@@ -137,6 +142,8 @@ export async function runAgentLoop(
 
 	const chatOptions = (): ChatOptions => ({
 		model: opts.model,
+		maxTokens: AGENT_MAX_TOKENS,
+		...opts.sampling,
 		signal: opts.signal,
 	});
 

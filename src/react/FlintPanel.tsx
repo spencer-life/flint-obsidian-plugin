@@ -13,14 +13,19 @@ import { TOOL_DEFINITIONS } from "../agent/tool-schemas";
 import { VaultToolExecutor } from "../agent/vault-tools";
 import { renderFolderTree } from "../agent/vault-tree";
 import { neutralizeRemoteImageMarkdown, runPipeline } from "../chat/pipeline";
-import { fetchModels, getProvider } from "../providers";
+import {
+	fetchModels,
+	getProvider,
+	getProviderFor,
+	resolveSampling,
+} from "../providers";
 import type {
 	AgentMessage,
 	ChatMessage,
 	ContentPart,
 } from "../providers/types";
 import { ToolsUnsupportedError } from "../providers/types";
-import type { ProviderId } from "../settings";
+import { type ProviderId, resolveTaskModel } from "../settings";
 import { ModelSuggest } from "../ui/model-suggest";
 import { NotePickerModal } from "../ui/note-picker";
 import { useApp, usePlugin } from "./context";
@@ -121,6 +126,18 @@ function nextId(): string {
 	return `flint-msg-${messageCounter}`;
 }
 
+/** Maps pasted/attached images to provider-neutral content parts — shared by
+ * agent mode and the RAG pipeline so both send images the same way. */
+function toContentParts(images: ImageAttachment[]): ContentPart[] {
+	return images.map(
+		(image): ContentPart => ({
+			type: "image",
+			mimeType: image.mimeType,
+			base64: image.base64,
+		}),
+	);
+}
+
 function describeError(err: unknown): string {
 	const message = err instanceof Error ? err.message : String(err);
 	if (/image|vision|multimodal|multi-modal/i.test(message)) {
@@ -186,6 +203,7 @@ function Citations({ paths }: { paths: string[] }) {
 	return (
 		<div className="flint-citations">
 			{paths.map((path) => (
+				// biome-ignore lint/a11y/useValidAnchor: styled as an Obsidian internal link; a button would lose the native link affordance
 				<a
 					key={path}
 					className="flint-citation"
@@ -242,6 +260,7 @@ export function FlintPanel() {
 		new Map<string, (decision: "apply" | "skip") => void>(),
 	);
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: `messages` is the intentional trigger — scroll to bottom whenever a message is added, even though the effect body only touches the ref
 	useEffect(() => {
 		const el = listRef.current;
 		if (el) el.scrollTop = el.scrollHeight;
@@ -501,13 +520,7 @@ export function FlintPanel() {
 							...(query.length > 0
 								? [{ type: "text", text: query } as ContentPart]
 								: []),
-							...images.map(
-								(image): ContentPart => ({
-									type: "image",
-									mimeType: image.mimeType,
-									base64: image.base64,
-								}),
-							),
+							...toContentParts(images),
 						]
 					: query;
 
@@ -537,13 +550,25 @@ export function FlintPanel() {
 				}));
 			};
 
+			// Images route through the vision task-model pair (its own provider);
+			// agent turns keep tools either way — VL is tool-trained, and
+			// ToolsUnsupportedError already degrades to the RAG pipeline below.
+			const resolvedModel =
+				images.length > 0
+					? resolveTaskModel(settings, "vision")
+					: {
+							providerId: settings.activeProvider,
+							model: settings.activeModel,
+						};
+
 			const result = await runAgentLoop({
-				provider: getProvider(settings),
-				model: settings.activeModel,
+				provider: getProviderFor(resolvedModel.providerId, settings),
+				model: resolvedModel.model,
 				messages: transcript,
 				tools: TOOL_DEFINITIONS,
 				executor,
 				stream: settings.streamResponses,
+				sampling: resolveSampling(settings),
 				signal: controller.signal,
 				events: {
 					onToken: (token) => {
@@ -692,6 +717,7 @@ export function FlintPanel() {
 					signal: controller.signal,
 					pinnedPaths: attachments.map((file) => file.path),
 					app,
+					images: toContentParts(images),
 					onToken: (token) => {
 						setMessages((prev) =>
 							prev.map((m) =>

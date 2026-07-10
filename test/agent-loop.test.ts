@@ -3,6 +3,7 @@ import "./obsidian-mock";
 import type {
 	AgentMessage,
 	AssistantTurn,
+	ChatOptions,
 	Provider,
 	ToolCall,
 } from "../src/providers/types";
@@ -260,5 +261,42 @@ describe("runAgentLoop", () => {
 		const tools = toolMessages(result.appended);
 		expect(tools).toHaveLength(11);
 		expect(tools[10]?.content).toContain("Mutation cap");
+	});
+
+	test("chatOptions carry maxTokens 4096 and forward sampling overrides", async () => {
+		const capturedOpts: ChatOptions[] = [];
+		const provider: Provider = {
+			name: "capture",
+			chat: async () => "unused",
+			streamChat: async () => "unused",
+			listModels: async () => [],
+			chatWithTools: async (_messages, _tools, opts) => {
+				capturedOpts.push(opts);
+				return { text: "done", toolCalls: [] };
+			},
+			streamChatWithTools: async (_messages, _tools, opts) => {
+				capturedOpts.push(opts);
+				return { text: "done", toolCalls: [] };
+			},
+		};
+
+		await runAgentLoop({
+			provider,
+			model: "m",
+			messages: [{ role: "user", content: "go" }],
+			tools: [],
+			executor: recordingExecutor(),
+			stream: false,
+			sampling: { temperature: 0.5, topP: 0.9, seed: 3 },
+			events: { requestConfirmation: async () => "apply" },
+		});
+
+		expect(capturedOpts[0]).toMatchObject({
+			model: "m",
+			maxTokens: 4096,
+			temperature: 0.5,
+			topP: 0.9,
+			seed: 3,
+		});
 	});
 });

@@ -1,13 +1,14 @@
 import type { App } from "obsidian";
 import { TFile } from "obsidian";
 import type { VaultChunk, VaultIndex } from "../index/vault-index";
-import { getProvider } from "../providers";
+import { getProvider, getProviderFor, resolveSampling } from "../providers";
 import type {
 	ChatMessage,
 	ChatOptions,
+	ContentPart,
 	TokenHandler,
 } from "../providers/types";
-import type { FlintSettings } from "../settings";
+import { type FlintSettings, resolveTaskModel } from "../settings";
 
 // Per-note cap on user-attached (pinned) content, so a handful of long notes
 // can't blow up the prompt the way unbounded retrieval chunks could.
@@ -36,6 +37,9 @@ export interface PipelineOptions {
 	pinnedPaths?: string[];
 	/** App handle, required only when `pinnedPaths` is non-empty. */
 	app?: App;
+	/** Images attached to the new query. Non-empty routes the send through
+	 * the vision task-model pair instead of the active chat model. */
+	images?: ContentPart[];
 }
 
 export interface PipelineResult {
@@ -159,16 +163,35 @@ export async function runPipeline(
 	const chunks = await index.retrieve(query, opts.k ?? settings.retrievalCount);
 	const systemPrompt = buildSystemPrompt(chunks, pinnedNotes);
 
+	const images = opts.images ?? [];
+	const userContent: string | ContentPart[] =
+		images.length > 0
+			? [
+					...(query.length > 0
+						? [{ type: "text", text: query } as ContentPart]
+						: []),
+					...images,
+				]
+			: query;
+
 	const messages: ChatMessage[] = [
 		{ role: "system", content: systemPrompt },
 		...(opts.history ?? []),
-		{ role: "user", content: query },
+		{ role: "user", content: userContent },
 	];
 
-	const provider = getProvider(settings);
+	// Images route through the vision task-model pair (its own provider,
+	// falling back to the active chat model/provider when unset) — retrieval
+	// above is unaffected, since it always keys off the plain-text query.
+	const visionModel =
+		images.length > 0 ? resolveTaskModel(settings, "vision") : null;
+	const provider = visionModel
+		? getProviderFor(visionModel.providerId, settings)
+		: getProvider(settings);
 	const chatOptions: ChatOptions = {
-		model: settings.activeModel,
+		model: visionModel ? visionModel.model : settings.activeModel,
 		signal: opts.signal,
+		...resolveSampling(settings),
 	};
 
 	const answer =

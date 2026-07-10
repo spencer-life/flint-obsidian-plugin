@@ -84,6 +84,16 @@ export interface FlintSettings {
 		organize: TaskModelOverride;
 		dashboard: TaskModelOverride;
 		htmlGenerate: TaskModelOverride;
+		vision: TaskModelOverride;
+	};
+	/** Optional advanced sampling overrides, wired into the chat pipeline and
+	 * agent loop only — `null` means "use the provider's own default".
+	 * Task-model calls (triage/organize/dashboard/htmlGenerate/vision) never
+	 * read these. */
+	sampling: {
+		temperature: number | null;
+		topP: number | null;
+		seed: number | null;
 	};
 }
 
@@ -139,6 +149,7 @@ export function migrateTaskModels(
 		organize: { providerId: "", model: "" },
 		dashboard: { providerId: "", model: "" },
 		htmlGenerate: { providerId: "", model: "" },
+		vision: { providerId: "", model: "" },
 	};
 	if (typeof raw !== "object" || raw === null) return result;
 
@@ -163,7 +174,7 @@ export function migrateTaskModels(
 }
 
 /** Current `settingsVersion` written by this build. */
-export const SETTINGS_VERSION = 4;
+export const SETTINGS_VERSION = 5;
 
 export interface SettingsLoadResult {
 	settings: FlintSettings;
@@ -246,6 +257,33 @@ export function loadSettingsFromRaw(raw: unknown): SettingsLoadResult {
 	}
 
 	settings.taskModels = migrateTaskModels(rawObj["taskModels"], legacyProvider);
+
+	// v4 -> v5: seed the new vision task model, and move the dashboard/
+	// htmlGenerate suggested model off the retired gemma-3-12b-it onto
+	// z-ai/glm-5.2 — but only where the override was empty (inheriting the
+	// old suggestion) or still pinned to the old suggestion itself, so a
+	// deliberately-chosen custom override survives untouched. Ordering
+	// exception: unlike every block above, this one runs AFTER
+	// `migrateTaskModels` because it operates on the NORMALIZED
+	// `{providerId, model}` shape, not the raw (possibly legacy-string) blob.
+	if (version < 5) {
+		settings.taskModels.vision = {
+			providerId: "nim",
+			model: "nvidia/nemotron-nano-12b-v2-vl",
+		};
+		for (const key of ["dashboard", "htmlGenerate"] as const) {
+			const current = settings.taskModels[key];
+			const isEmpty = current.model.trim() === "";
+			const isOldGemmaSuggestion =
+				current.model === "google/gemma-3-12b-it" &&
+				(current.providerId === "nim" || current.providerId === "");
+			if (isEmpty || isOldGemmaSuggestion) {
+				settings.taskModels[key] = { providerId: "nim", model: "z-ai/glm-5.2" };
+			}
+		}
+		migrated = true;
+	}
+
 	settings.settingsVersion = SETTINGS_VERSION;
 	return { settings, migrated, autoApplyDisabled };
 }
@@ -293,7 +331,9 @@ export const DEFAULT_SETTINGS: FlintSettings = {
 		organize: { providerId: "", model: "" },
 		dashboard: { providerId: "", model: "" },
 		htmlGenerate: { providerId: "", model: "" },
+		vision: { providerId: "", model: "" },
 	},
+	sampling: { temperature: null, topP: null, seed: null },
 };
 
 export class FlintSettingTab extends PluginSettingTab {
@@ -555,13 +595,18 @@ export class FlintSettingTab extends PluginSettingTab {
 		);
 		addTaskModelSetting(
 			"Daily dashboard model",
-			"Suggested: google/gemma-3-12b-it (clean prose)",
+			"Suggested: z-ai/glm-5.2 (clean prose)",
 			"dashboard",
 		);
 		addTaskModelSetting(
 			"HTML generation model",
-			"Leave empty to use the chat model (best quality)",
+			"Suggested: z-ai/glm-5.2. Leave empty to use the chat model (best quality)",
 			"htmlGenerate",
+		);
+		addTaskModelSetting(
+			"Vision model",
+			"Suggested: nvidia/nemotron-nano-12b-v2-vl. Used automatically when you attach an image.",
+			"vision",
 		);
 
 		new Setting(containerEl).setName("Vault indexing").setHeading();
@@ -754,6 +799,47 @@ export class FlintSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					});
 			});
+
+		new Setting(containerEl).setName("Advanced sampling").setHeading();
+		containerEl.createEl("p", {
+			text: "Optional. Leave blank to use each model's own server-side defaults (e.g. NIM already applies sensible model-card defaults — minimax-m2.7 ships 1.0 temperature / 0.95 top-p). Wired into the chat pipeline and agent mode; task models (triage, organize, dashboard, HTML, vision) never read these.",
+			cls: "setting-item-description",
+		});
+
+		const addSamplingField = (
+			name: string,
+			key: "temperature" | "topP" | "seed",
+		) => {
+			new Setting(containerEl)
+				.setName(name)
+				.setDesc("Blank = provider default.")
+				.addText((text) => {
+					text
+						.setPlaceholder("blank = default")
+						.setValue(
+							this.plugin.settings.sampling[key] === null
+								? ""
+								: String(this.plugin.settings.sampling[key]),
+						)
+						.onChange(async (value) => {
+							const trimmed = value.trim();
+							if (trimmed.length === 0) {
+								this.plugin.settings.sampling[key] = null;
+								await this.plugin.saveSettings();
+								return;
+							}
+							const parsed = Number.parseFloat(trimmed);
+							if (Number.isFinite(parsed)) {
+								this.plugin.settings.sampling[key] = parsed;
+								await this.plugin.saveSettings();
+							}
+						});
+				});
+		};
+
+		addSamplingField("Temperature", "temperature");
+		addSamplingField("Top P", "topP");
+		addSamplingField("Seed", "seed");
 
 		new Setting(containerEl).setName("Capture triage").setHeading();
 

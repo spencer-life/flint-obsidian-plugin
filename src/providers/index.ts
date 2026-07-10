@@ -8,9 +8,25 @@ import {
 } from "../settings";
 import { AnthropicProvider } from "./anthropic";
 import { NIM_BASE_URL, OpenAICompatibleProvider } from "./openai-compatible";
-import type { ChatMessage, Provider } from "./types";
+import type { ChatMessage, ChatOptions, Provider } from "./types";
 
 export type { ChatMessage, ChatOptions, Provider } from "./types";
+
+/** Fixed sampling/length defaults per background task, applied on top of
+ * whatever the resolved model/provider is — independent of Advanced sampling
+ * settings, which task-model calls never read. `vision` carries no defaults:
+ * it's resolved through `resolveTaskModel`/`getProviderFor` directly from the
+ * panel, not through `chatWithTaskModel`. */
+const TASK_CHAT_DEFAULTS: Record<
+	TaskModelKey,
+	Pick<ChatOptions, "temperature" | "reasoning" | "maxTokens">
+> = {
+	triage: { temperature: 0.2, reasoning: "nonthink" },
+	organize: { temperature: 0.2, reasoning: "nonthink" },
+	dashboard: { maxTokens: 8192 },
+	htmlGenerate: { maxTokens: 8192 },
+	vision: {},
+};
 
 /**
  * Factory that resolves the currently-configured provider from settings.
@@ -75,6 +91,30 @@ function buildProvider(
 	});
 }
 
+/** Builds a provider for a SPECIFIC (not necessarily active) provider id —
+ * e.g. the vision task-model pair, which can point at a different provider
+ * than the active chat model. */
+export function getProviderFor(
+	providerId: ProviderId,
+	settings: FlintSettings,
+): Provider {
+	return buildProvider(providerId, resolveConfig(providerId, settings));
+}
+
+/** Non-null Advanced sampling overrides from settings, ready to spread into
+ * `ChatOptions` — `null` fields are omitted so provider request bodies drop
+ * them rather than sending an explicit `null`. */
+export function resolveSampling(
+	settings: FlintSettings,
+): Pick<ChatOptions, "temperature" | "topP" | "seed"> {
+	const { temperature, topP, seed } = settings.sampling;
+	return {
+		...(temperature !== null ? { temperature } : {}),
+		...(topP !== null ? { topP } : {}),
+		...(seed !== null ? { seed } : {}),
+	};
+}
+
 /** How much of a provider error message reaches a user-facing Notice. */
 const NOTICE_REASON_CHARS = 200;
 
@@ -100,11 +140,15 @@ export async function chatWithTaskModel(
 		resolved.providerId,
 		resolveConfig(resolved.providerId, settings),
 	);
+	const defaults = TASK_CHAT_DEFAULTS[task];
 	if (isActiveModel) {
-		return provider.chat(messages, { model: resolved.model });
+		return provider.chat(messages, { model: resolved.model, ...defaults });
 	}
 	try {
-		return await provider.chat(messages, { model: resolved.model });
+		return await provider.chat(messages, {
+			model: resolved.model,
+			...defaults,
+		});
 	} catch (error) {
 		const reason = (
 			error instanceof Error ? error.message : String(error)
@@ -115,6 +159,7 @@ export async function chatWithTaskModel(
 		);
 		return getProvider(settings).chat(messages, {
 			model: settings.activeModel,
+			...defaults,
 		});
 	}
 }

@@ -178,6 +178,142 @@ describe("NIM DeepSeek v4 quirks: chat_template_kwargs", () => {
 	});
 });
 
+describe("OpenAI-compatible sampling params", () => {
+	test("temperature/top_p/seed present in the body when set", async () => {
+		setRequestUrlHandler(() => ({
+			json: { choices: [{ message: { content: "hi" } }] },
+		}));
+		const provider = new OpenAICompatibleProvider({
+			baseUrl: NIM_BASE_URL,
+			apiKey: "nvapi-test",
+		});
+
+		await provider.chat([{ role: "user", content: "hi" }], {
+			model: "meta/llama-3.1-8b-instruct",
+			temperature: 0.5,
+			topP: 0.9,
+			seed: 42,
+		});
+
+		const body = JSON.parse(requestUrlCalls[0]?.body ?? "{}");
+		expect(body.temperature).toBe(0.5);
+		expect(body.top_p).toBe(0.9);
+		expect(body.seed).toBe(42);
+	});
+
+	test("absent from the body when unset", async () => {
+		setRequestUrlHandler(() => ({
+			json: { choices: [{ message: { content: "hi" } }] },
+		}));
+		const provider = new OpenAICompatibleProvider({
+			baseUrl: NIM_BASE_URL,
+			apiKey: "nvapi-test",
+		});
+
+		await provider.chat([{ role: "user", content: "hi" }], {
+			model: "meta/llama-3.1-8b-instruct",
+		});
+
+		const body = JSON.parse(requestUrlCalls[0]?.body ?? "{}");
+		expect(body).not.toHaveProperty("temperature");
+		expect(body).not.toHaveProperty("top_p");
+		expect(body).not.toHaveProperty("seed");
+	});
+});
+
+describe("Anthropic sampling params", () => {
+	test("temperature/top_p present when set, seed NEVER emitted", async () => {
+		setRequestUrlHandler(() => ({ json: { content: [{ text: "hi" }] } }));
+		const provider = new AnthropicProvider({ apiKey: "key" });
+
+		await provider.chat([{ role: "user", content: "hi" }], {
+			model: "claude-sonnet-4-5",
+			temperature: 0.3,
+			topP: 0.8,
+			seed: 999,
+		});
+
+		const body = JSON.parse(requestUrlCalls[0]?.body ?? "{}");
+		expect(body.temperature).toBe(0.3);
+		expect(body.top_p).toBe(0.8);
+		expect(body).not.toHaveProperty("seed");
+	});
+
+	test("absent when unset", async () => {
+		setRequestUrlHandler(() => ({ json: { content: [{ text: "hi" }] } }));
+		const provider = new AnthropicProvider({ apiKey: "key" });
+
+		await provider.chat([{ role: "user", content: "hi" }], {
+			model: "claude-sonnet-4-5",
+		});
+
+		const body = JSON.parse(requestUrlCalls[0]?.body ?? "{}");
+		expect(body).not.toHaveProperty("temperature");
+		expect(body).not.toHaveProperty("top_p");
+	});
+});
+
+describe("NIM DeepSeek reasoning quirk kwargs", () => {
+	test("nonthink reasoning emits disabled kwargs for deepseek-v4 on NIM", async () => {
+		setRequestUrlHandler(() => ({
+			json: { choices: [{ message: { content: "hi" } }] },
+		}));
+		const provider = new OpenAICompatibleProvider({
+			baseUrl: NIM_BASE_URL,
+			apiKey: "nvapi-test",
+		});
+
+		await provider.chat([{ role: "user", content: "hi" }], {
+			model: "deepseek-ai/deepseek-v4-flash",
+			reasoning: "nonthink",
+		});
+
+		const body = JSON.parse(requestUrlCalls[0]?.body ?? "{}");
+		expect(body.chat_template_kwargs).toEqual({
+			enable_thinking: false,
+			thinking: false,
+		});
+	});
+
+	test("default (no reasoning specified) keeps the existing think kwargs", async () => {
+		setRequestUrlHandler(() => ({
+			json: { choices: [{ message: { content: "hi" } }] },
+		}));
+		const provider = new OpenAICompatibleProvider({
+			baseUrl: NIM_BASE_URL,
+			apiKey: "nvapi-test",
+		});
+
+		await provider.chat([{ role: "user", content: "hi" }], {
+			model: "deepseek-ai/deepseek-v4-pro",
+		});
+
+		const body = JSON.parse(requestUrlCalls[0]?.body ?? "{}");
+		expect(body.chat_template_kwargs).toEqual({
+			enable_thinking: true,
+			thinking: true,
+		});
+	});
+
+	test("nonthink on a non-deepseek model emits no kwargs", async () => {
+		setRequestUrlHandler(() => ({
+			json: { choices: [{ message: { content: "hi" } }] },
+		}));
+		const provider = new OpenAICompatibleProvider({
+			baseUrl: NIM_BASE_URL,
+			apiKey: "nvapi-test",
+		});
+
+		await provider.chat([{ role: "user", content: "hi" }], {
+			model: "minimaxai/minimax-m3",
+			reasoning: "nonthink",
+		});
+
+		const body = JSON.parse(requestUrlCalls[0]?.body ?? "{}");
+		expect(body.chat_template_kwargs).toBeUndefined();
+	});
+});
+
 describe("validateBaseUrl", () => {
 	test("accepts a well-formed https URL", () => {
 		expect(() => validateBaseUrl("https://api.openai.com/v1")).not.toThrow();

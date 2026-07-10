@@ -287,4 +287,61 @@ describe("runPipeline", () => {
 			{ role: "user", content: "follow-up question" },
 		]);
 	});
+
+	describe("images / vision routing", () => {
+		test("with images: builds a ContentPart[] user message and routes through the vision task-model pair", async () => {
+			const app = createFakeApp([]);
+			const index = new VaultIndex(app, [], indexSettings());
+			await index.build();
+
+			setRequestUrlHandler(() => ({
+				json: { choices: [{ message: { content: "I see a cat." } }] },
+			}));
+
+			const settings = cloneSettings();
+			settings.activeProvider = "anthropic";
+			settings.providers.anthropic.apiKey = "sk-ant-test";
+			settings.activeModel = "claude-sonnet-4-5";
+			settings.providers.nim.apiKey = "nvapi-test";
+			settings.taskModels.vision = {
+				providerId: "nim",
+				model: "nvidia/nemotron-nano-12b-v2-vl",
+			};
+
+			const result = await runPipeline("what is this?", settings, index, {
+				images: [{ type: "image", mimeType: "image/png", base64: "QUJD" }],
+			});
+
+			expect(result.answer).toBe("I see a cat.");
+			expect(requestUrlCalls[0]?.url).toBe(`${NIM_BASE_URL}/chat/completions`);
+			const body = JSON.parse(requestUrlCalls[0]?.body ?? "{}");
+			expect(body.model).toBe("nvidia/nemotron-nano-12b-v2-vl");
+			expect(body.messages[body.messages.length - 1].content).toEqual([
+				{ type: "text", text: "what is this?" },
+				{
+					type: "image_url",
+					image_url: { url: "data:image/png;base64,QUJD" },
+				},
+			]);
+		});
+
+		test("without images: plain string content on the active model, unchanged", async () => {
+			const app = createFakeApp([]);
+			const index = new VaultIndex(app, [], indexSettings());
+			await index.build();
+
+			setRequestUrlHandler(() => ({ json: { content: [{ text: "ok" }] } }));
+
+			const settings = cloneSettings();
+			settings.activeProvider = "anthropic";
+			settings.providers.anthropic.apiKey = "key";
+			settings.activeModel = "claude-sonnet-4-5";
+
+			await runPipeline("hello", settings, index);
+
+			const body = JSON.parse(requestUrlCalls[0]?.body ?? "{}");
+			expect(body.model).toBe("claude-sonnet-4-5");
+			expect(body.messages[body.messages.length - 1].content).toBe("hello");
+		});
+	});
 });

@@ -79,6 +79,11 @@ export class ReasoningOnlyError extends Error {
 export interface ChatOptions {
 	model: string;
 	maxTokens?: number;
+	temperature?: number;
+	topP?: number;
+	seed?: number;
+	/** Omitted = "think" (current behavior, no request-body change). */
+	reasoning?: "think" | "nonthink";
 	signal?: AbortSignal;
 }
 

@@ -48,6 +48,8 @@ interface AnthropicMessage {
 interface AnthropicRequestBody {
 	model: string;
 	max_tokens: number;
+	temperature?: number;
+	top_p?: number;
 	system?: string;
 	messages: AnthropicMessage[];
 	stream?: boolean;
@@ -243,6 +245,8 @@ export class AnthropicProvider implements Provider {
 		return {
 			model: opts.model,
 			max_tokens: opts.maxTokens ?? DEFAULT_MAX_TOKENS,
+			temperature: opts.temperature,
+			top_p: opts.topP,
 			system,
 			messages: conversation,
 			...(stream ? { stream: true } : {}),
@@ -259,6 +263,8 @@ export class AnthropicProvider implements Provider {
 		return {
 			model: opts.model,
 			max_tokens: opts.maxTokens ?? DEFAULT_MAX_TOKENS,
+			temperature: opts.temperature,
+			top_p: opts.topP,
 			system,
 			messages: conversation,
 			...(tools.length > 0 ? { tools: toAnthropicTools(tools) } : {}),

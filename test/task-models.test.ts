@@ -70,6 +70,17 @@ describe("resolveTaskModel", () => {
 			model: "gpt-4.1-mini",
 		});
 	});
+
+	test("empty vision override falls back to the active chat model, same as any other task", () => {
+		const settings = cloneSettings();
+		settings.activeProvider = "anthropic";
+		settings.activeModel = "claude-sonnet-4-5";
+		settings.taskModels.vision = { providerId: "", model: "" };
+		expect(resolveTaskModel(settings, "vision")).toEqual({
+			providerId: "anthropic",
+			model: "claude-sonnet-4-5",
+		});
+	});
 });
 
 describe("migrateTaskModels", () => {
@@ -285,6 +296,96 @@ describe("loadSettingsFromRaw", () => {
 			expect(result.migrated).toBe(false);
 		});
 	});
+
+	describe("v4 -> v5: vision task model seed + dashboard/htmlGenerate -> glm-5.2", () => {
+		test("seeds vision unconditionally to nim + nemotron-nano-12b-v2-vl", () => {
+			const result = loadSettingsFromRaw({ settingsVersion: 4 });
+			expect(result.settings.taskModels.vision).toEqual({
+				providerId: "nim",
+				model: "nvidia/nemotron-nano-12b-v2-vl",
+			});
+			expect(result.migrated).toBe(true);
+			expect(result.settings.settingsVersion).toBe(SETTINGS_VERSION);
+		});
+
+		test("rewrites the deprecated gemma suggestion (pinned to nim) to glm-5.2", () => {
+			const result = loadSettingsFromRaw({
+				settingsVersion: 4,
+				taskModels: {
+					dashboard: { providerId: "nim", model: "google/gemma-3-12b-it" },
+				},
+			});
+			expect(result.settings.taskModels.dashboard).toEqual({
+				providerId: "nim",
+				model: "z-ai/glm-5.2",
+			});
+		});
+
+		test("rewrites an empty htmlGenerate override to glm-5.2", () => {
+			const result = loadSettingsFromRaw({
+				settingsVersion: 4,
+				taskModels: { htmlGenerate: { providerId: "", model: "" } },
+			});
+			expect(result.settings.taskModels.htmlGenerate).toEqual({
+				providerId: "nim",
+				model: "z-ai/glm-5.2",
+			});
+		});
+
+		test("leaves a custom dashboard override untouched", () => {
+			const result = loadSettingsFromRaw({
+				settingsVersion: 4,
+				taskModels: {
+					dashboard: { providerId: "openai", model: "gpt-4o" },
+				},
+			});
+			expect(result.settings.taskModels.dashboard).toEqual({
+				providerId: "openai",
+				model: "gpt-4o",
+			});
+		});
+
+		test("leaves the gemma suggestion untouched when pinned to a non-NIM provider", () => {
+			const result = loadSettingsFromRaw({
+				settingsVersion: 4,
+				taskModels: {
+					htmlGenerate: {
+						providerId: "openai",
+						model: "google/gemma-3-12b-it",
+					},
+				},
+			});
+			expect(result.settings.taskModels.htmlGenerate).toEqual({
+				providerId: "openai",
+				model: "google/gemma-3-12b-it",
+			});
+		});
+
+		test("already-v5 data with an emptied vision override is NOT re-seeded (one-shot)", () => {
+			const result = loadSettingsFromRaw({
+				settingsVersion: SETTINGS_VERSION,
+				taskModels: { vision: { providerId: "", model: "" } },
+			});
+			expect(result.settings.taskModels.vision).toEqual({
+				providerId: "",
+				model: "",
+			});
+			expect(result.migrated).toBe(false);
+		});
+
+		test("v0 (no settingsVersion) chains v2 -> v5 in one load", () => {
+			const result = loadSettingsFromRaw({
+				activeProvider: "nim",
+				activeModel: "deepseek-ai/deepseek-v4-pro",
+			});
+			expect(result.settings.activeModel).toBe("minimaxai/minimax-m2.7");
+			expect(result.settings.taskModels.vision).toEqual({
+				providerId: "nim",
+				model: "nvidia/nemotron-nano-12b-v2-vl",
+			});
+			expect(result.settings.settingsVersion).toBe(SETTINGS_VERSION);
+		});
+	});
 });
 
 describe("chatWithTaskModel provider routing", () => {
@@ -343,6 +444,55 @@ describe("chatWithTaskModel provider routing", () => {
 		expect(requestUrlCalls[1]?.url).toContain("anthropic.com");
 		const fallbackBody = JSON.parse(requestUrlCalls[1]?.body ?? "{}");
 		expect(fallbackBody.model).toBe("claude-sonnet-4-5");
+	});
+});
+
+describe("chatWithTaskModel applies TASK_CHAT_DEFAULTS", () => {
+	test("triage on NIM deepseek-v4-flash: temperature 0.2 + nonthink kwargs", async () => {
+		const settings = cloneSettings();
+		settings.activeProvider = "anthropic";
+		settings.activeModel = "claude-sonnet-4-5";
+		settings.providers.anthropic.apiKey = "sk-ant-test";
+		settings.providers.nim.apiKey = "nvapi-test";
+		settings.taskModels.triage = {
+			providerId: "nim",
+			model: "deepseek-ai/deepseek-v4-flash",
+		};
+
+		setRequestUrlHandler(() => ({
+			json: { choices: [{ message: { content: "ok" } }] },
+		}));
+
+		await chatWithTaskModel(settings, "triage", [
+			{ role: "user", content: "hi" },
+		]);
+
+		const body = JSON.parse(requestUrlCalls[0]?.body ?? "{}");
+		expect(body.temperature).toBe(0.2);
+		expect(body.chat_template_kwargs).toEqual({
+			enable_thinking: false,
+			thinking: false,
+		});
+	});
+
+	test("dashboard task call carries max_tokens 8192", async () => {
+		const settings = cloneSettings();
+		settings.activeProvider = "anthropic";
+		settings.activeModel = "claude-sonnet-4-5";
+		settings.providers.anthropic.apiKey = "sk-ant-test";
+		settings.taskModels.dashboard = {
+			providerId: "anthropic",
+			model: "claude-sonnet-4-5",
+		};
+
+		setRequestUrlHandler(() => ({ json: { content: [{ text: "ok" }] } }));
+
+		await chatWithTaskModel(settings, "dashboard", [
+			{ role: "user", content: "hi" },
+		]);
+
+		const body = JSON.parse(requestUrlCalls[0]?.body ?? "{}");
+		expect(body.max_tokens).toBe(8192);
 	});
 });
 

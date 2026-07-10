@@ -637,6 +637,72 @@ describe("multimodal content serialization", () => {
 	});
 });
 
+describe("sampling params flow through tool-calling + streaming paths", () => {
+	test("openai-compatible chatWithTools carries temperature/top_p/seed when set", async () => {
+		const provider = new OpenAICompatibleProvider({
+			baseUrl: "https://integrate.api.nvidia.com/v1",
+			apiKey: "nvapi-test",
+		});
+		setRequestUrlHandler(() => ({
+			json: { choices: [{ message: { content: "ok" } }] },
+		}));
+
+		await provider.chatWithTools([{ role: "user", content: "hi" }], TOOLS, {
+			model: "minimaxai/minimax-m3",
+			temperature: 0.4,
+			topP: 0.7,
+			seed: 7,
+		});
+
+		const body = JSON.parse(requestUrlCalls[0]?.body ?? "{}");
+		expect(body.temperature).toBe(0.4);
+		expect(body.top_p).toBe(0.7);
+		expect(body.seed).toBe(7);
+	});
+
+	test("anthropic chatWithTools carries temperature/top_p, never seed", async () => {
+		const provider = new AnthropicProvider({ apiKey: "sk-ant-test" });
+		setRequestUrlHandler(() => ({
+			json: { content: [{ type: "text", text: "ok" }] },
+		}));
+
+		await provider.chatWithTools([{ role: "user", content: "hi" }], TOOLS, {
+			model: "claude-sonnet-4-5",
+			temperature: 0.4,
+			topP: 0.7,
+			seed: 7,
+		});
+
+		const body = JSON.parse(requestUrlCalls[0]?.body ?? "{}");
+		expect(body.temperature).toBe(0.4);
+		expect(body.top_p).toBe(0.7);
+		expect(body).not.toHaveProperty("seed");
+	});
+
+	test("openai-compatible streamChat carries temperature/top_p/seed in the SSE request body", async () => {
+		const provider = new OpenAICompatibleProvider({
+			baseUrl: "https://integrate.api.nvidia.com/v1",
+			apiKey: "nvapi-test",
+		});
+		let capturedBody = "";
+		globalThis.fetch = (async (_url: unknown, init?: { body?: unknown }) => {
+			capturedBody = String(init?.body ?? "");
+			return sseResponse(["[DONE]"]);
+		}) as unknown as typeof fetch;
+
+		await provider.streamChat(
+			[{ role: "user", content: "hi" }],
+			{ model: "minimaxai/minimax-m3", temperature: 0.4, topP: 0.7, seed: 7 },
+			() => {},
+		);
+
+		const body = JSON.parse(capturedBody || "{}");
+		expect(body.temperature).toBe(0.4);
+		expect(body.top_p).toBe(0.7);
+		expect(body.seed).toBe(7);
+	});
+});
+
 describe("ToolCallAssembler", () => {
 	test("orders by index and drops nameless fragments", () => {
 		const assembler = new ToolCallAssembler();

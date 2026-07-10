@@ -162,16 +162,28 @@ interface NimDeepseekQuirks {
 	forceNonStreamingTools: true;
 }
 
+const DEEPSEEK_THINK_KWARGS = {
+	chat_template_kwargs: { enable_thinking: true, thinking: true },
+};
+
+// TODO: kwargs shape unverified against NIM docs for the nonthink case —
+// mirrors the think shape until confirmed live.
+const DEEPSEEK_NONTHINK_KWARGS = {
+	chat_template_kwargs: { enable_thinking: false, thinking: false },
+};
+
 function nimDeepseekQuirks(
 	baseUrl: string,
 	model: string,
+	reasoning?: "think" | "nonthink",
 ): NimDeepseekQuirks | null {
 	if (baseUrl !== NIM_BASE_URL) return null;
 	if (!model.toLowerCase().startsWith("deepseek-ai/deepseek-v4")) return null;
 	return {
-		extraBody: {
-			chat_template_kwargs: { enable_thinking: true, thinking: true },
-		},
+		extraBody:
+			reasoning === "nonthink"
+				? DEEPSEEK_NONTHINK_KWARGS
+				: DEEPSEEK_THINK_KWARGS,
 		forceNonStreamingTools: true,
 	};
 }
@@ -260,7 +272,7 @@ export class OpenAICompatibleProvider implements Provider {
 
 	async chat(messages: ChatMessage[], opts: ChatOptions): Promise<string> {
 		validateBaseUrl(this.config.baseUrl);
-		const quirks = nimDeepseekQuirks(this.config.baseUrl, opts.model);
+		const quirks = nimDeepseekQuirks(this.config.baseUrl, opts.model, opts.reasoning);
 		const response = await requestUrl({
 			url: `${this.config.baseUrl}/chat/completions`,
 			method: "POST",
@@ -275,6 +287,9 @@ export class OpenAICompatibleProvider implements Provider {
 					content: toOpenAIContent(message.content),
 				})),
 				max_tokens: opts.maxTokens,
+				temperature: opts.temperature,
+				top_p: opts.topP,
+				seed: opts.seed,
 				...(quirks?.extraBody ?? {}),
 			}),
 			throw: false,
@@ -319,7 +334,7 @@ export class OpenAICompatibleProvider implements Provider {
 		opts: ChatOptions,
 	): Promise<AssistantTurn> {
 		validateBaseUrl(this.config.baseUrl);
-		const quirks = nimDeepseekQuirks(this.config.baseUrl, opts.model);
+		const quirks = nimDeepseekQuirks(this.config.baseUrl, opts.model, opts.reasoning);
 		const response = await requestUrl({
 			url: `${this.config.baseUrl}/chat/completions`,
 			method: "POST",
@@ -331,6 +346,9 @@ export class OpenAICompatibleProvider implements Provider {
 				model: opts.model,
 				messages: toOpenAIAgentMessages(messages),
 				max_tokens: opts.maxTokens,
+				temperature: opts.temperature,
+				top_p: opts.topP,
+				seed: opts.seed,
 				...(tools.length > 0 ? { tools: toOpenAITools(tools) } : {}),
 				...(quirks?.extraBody ?? {}),
 			}),
@@ -428,7 +446,7 @@ export class OpenAICompatibleProvider implements Provider {
 		onToken: TokenHandler,
 	): Promise<string> {
 		validateBaseUrl(this.config.baseUrl);
-		const quirks = nimDeepseekQuirks(this.config.baseUrl, opts.model);
+		const quirks = nimDeepseekQuirks(this.config.baseUrl, opts.model, opts.reasoning);
 		try {
 			const response = await fetch(`${this.config.baseUrl}/chat/completions`, {
 				method: "POST",
@@ -443,6 +461,9 @@ export class OpenAICompatibleProvider implements Provider {
 						content: toOpenAIContent(message.content),
 					})),
 					max_tokens: opts.maxTokens,
+					temperature: opts.temperature,
+					top_p: opts.topP,
+					seed: opts.seed,
 					stream: true,
 					...(quirks?.extraBody ?? {}),
 				}),
@@ -516,7 +537,7 @@ export class OpenAICompatibleProvider implements Provider {
 		onToken: TokenHandler,
 	): Promise<AssistantTurn> {
 		validateBaseUrl(this.config.baseUrl);
-		const quirks = nimDeepseekQuirks(this.config.baseUrl, opts.model);
+		const quirks = nimDeepseekQuirks(this.config.baseUrl, opts.model, opts.reasoning);
 		if (quirks?.forceNonStreamingTools) {
 			// NIM's DeepSeek v4 streaming tool calls are unreliable model-side
 			// (NVIDIA forum #368085) — delegate to the guaranteed non-streaming
@@ -536,6 +557,9 @@ export class OpenAICompatibleProvider implements Provider {
 					model: opts.model,
 					messages: toOpenAIAgentMessages(messages),
 					max_tokens: opts.maxTokens,
+					temperature: opts.temperature,
+					top_p: opts.topP,
+					seed: opts.seed,
 					...(tools.length > 0 ? { tools: toOpenAITools(tools) } : {}),
 					stream: true,
 				}),
