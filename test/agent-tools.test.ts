@@ -73,6 +73,57 @@ describe("path validation", () => {
 		expect(result.isError).toBe(true);
 		expect(result.content).toContain("search_vault");
 	});
+
+	test("rejects dotfolder and dotfile paths across every tool that touches a path", async () => {
+		const app = createFakeApp(
+			[
+				{
+					path: ".obsidian/plugins/flint/data.json",
+					content: '{"apiKey":"secret"}',
+				},
+			],
+			{ folders: [...FOLDERS, ".obsidian/plugins/flint"] },
+		);
+		const executor = makeExecutor(app);
+
+		const dotPaths = [
+			".obsidian/plugins/flint/data.json",
+			".git/config",
+			".trash/Note.md",
+			"01 Projects/.hidden.md",
+		];
+
+		for (const path of dotPaths) {
+			const read = await executor.execute("read_note", { path });
+			expect(read.isError).toBe(true);
+			expect(read.content).toContain("must stay inside the vault");
+
+			const create = await executor.execute("create_note", {
+				path,
+				content: "x",
+			});
+			expect(create.isError).toBe(true);
+
+			const append = await executor.execute("append_to_note", {
+				path,
+				content: "x",
+			});
+			expect(append.isError).toBe(true);
+
+			const edit = await executor.execute("edit_note", {
+				path,
+				old_text: "a",
+				new_text: "b",
+			});
+			expect(edit.isError).toBe(true);
+
+			const move = await executor.execute("move_note", {
+				path,
+				destination: "01 Projects",
+			});
+			expect(move.isError).toBe(true);
+		}
+	});
 });
 
 describe("read_note / search_vault", () => {

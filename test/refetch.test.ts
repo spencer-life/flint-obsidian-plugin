@@ -112,6 +112,20 @@ describe("fetchAndConvert", () => {
 		expect(requestUrlCalls).toHaveLength(0);
 	});
 
+	test("throws on a private URL before either fetch path runs, even with a Firecrawl key configured", async () => {
+		setRequestUrlHandler(() => {
+			throw new Error("requestUrl should never be called for a private URL");
+		});
+
+		await expect(
+			fetchAndConvert("http://192.168.1.5/secret", "fc-test-key"),
+		).rejects.toThrow(/not a safe public URL/);
+		await expect(
+			fetchAndConvert("http://[fc00::1]/secret", "fc-test-key"),
+		).rejects.toThrow(/not a safe public URL/);
+		expect(requestUrlCalls).toHaveLength(0);
+	});
+
 	test("rejects a response whose content-type isn't text/html-ish", async () => {
 		setRequestUrlHandler(() => ({
 			text: "binary-ish content",
@@ -155,6 +169,13 @@ describe("isSafePublicUrl", () => {
 
 	test("blocks .local mDNS hostnames", () => {
 		expect(isSafePublicUrl("http://my-nas.local/x")).toBe(false);
+	});
+
+	test("blocks IPv6 unique-local, link-local, and IPv4-mapped ranges", () => {
+		expect(isSafePublicUrl("http://[fc00::1]/x")).toBe(false);
+		expect(isSafePublicUrl("http://[fd12:3456::1]/x")).toBe(false);
+		expect(isSafePublicUrl("http://[fe80::1]/x")).toBe(false);
+		expect(isSafePublicUrl("http://[::ffff:127.0.0.1]/x")).toBe(false);
 	});
 
 	test("blocks non-http(s) schemes", () => {

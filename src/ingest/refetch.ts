@@ -48,6 +48,9 @@ const PRIVATE_HOSTNAME_PATTERNS: RegExp[] = [
 	/^192\.168\./,
 	/^169\.254\./,
 	/^::1$/,
+	/^f[cd][0-9a-f]{2}:/i, // unique-local (fc00::/7)
+	/^fe[89ab][0-9a-f]:/i, // link-local (fe80::/10)
+	/^::ffff:/i, // IPv4-mapped
 	/\.local$/i,
 ];
 
@@ -144,6 +147,10 @@ export async function fetchAndConvert(
 	url: string,
 	firecrawlApiKey?: string,
 ): Promise<RefetchResult> {
+	if (!isSafePublicUrl(url)) {
+		throw new Error(`Refetch refused: "${url}" is not a safe public URL.`);
+	}
+
 	let direct: string | undefined;
 	let directError: unknown;
 

@@ -58,7 +58,8 @@ export class VaultToolExecutor {
 			path === ".." ||
 			path.startsWith("../") ||
 			path.includes("/../") ||
-			path.endsWith("/..")
+			path.endsWith("/..") ||
+			path.split("/").some((segment) => segment.startsWith("."))
 		) {
 			throw new Error(
 				`Invalid ${field}: "${raw}" — paths must stay inside the vault.`,

@@ -67,13 +67,21 @@ function hasRemoteUrl(value: string | null): boolean {
 		.some((url) => REMOTE_URL_PATTERN.test(url));
 }
 
+/** True for a `data:` URL — used to strip inline data-URI frames/objects that
+ * could carry an HTML/script payload. */
+function isDataUrl(value: string | null): boolean {
+	return !!value && /^data:/i.test(value.trim());
+}
+
 /**
  * Post-render DOM scrub, as defense-in-depth alongside
  * `neutralizeRemoteImageMarkdown`: removes any `img`/`iframe`/`audio`/
  * `video`/`embed`/`object`/`source` left with a remote `src`/`srcset` (e.g.
  * from raw HTML the model embedded in its reply, which Markdown transforms
- * alone can't catch) and any `link[rel=stylesheet]`, both of which Obsidian's
- * `MarkdownRenderer` would otherwise silently fetch.
+ * alone can't catch), any `iframe[srcdoc]` (inline HTML the model could use
+ * to run script in the panel), any `data:` URL on a frame/object `src`, and
+ * any `style`/`link[rel=stylesheet]`, all of which Obsidian's
+ * `MarkdownRenderer` would otherwise silently render or fetch.
  */
 function scrubRemoteEmbeds(root: HTMLElement): void {
 	const embeds = root.querySelectorAll(
@@ -82,13 +90,15 @@ function scrubRemoteEmbeds(root: HTMLElement): void {
 	for (const el of Array.from(embeds)) {
 		if (
 			hasRemoteUrl(el.getAttribute("src")) ||
-			hasRemoteUrl(el.getAttribute("srcset"))
+			hasRemoteUrl(el.getAttribute("srcset")) ||
+			el.hasAttribute("srcdoc") ||
+			isDataUrl(el.getAttribute("src"))
 		) {
 			el.remove();
 		}
 	}
 	for (const el of Array.from(
-		root.querySelectorAll('link[rel="stylesheet"]'),
+		root.querySelectorAll('style,link[rel="stylesheet"]'),
 	)) {
 		el.remove();
 	}
