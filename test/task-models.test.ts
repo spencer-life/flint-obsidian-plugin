@@ -185,13 +185,13 @@ describe("loadSettingsFromRaw", () => {
 	});
 
 	describe("v2 -> v3: NIM deepseek-v4-pro chat model rewrite", () => {
-		test("rewrites activeModel to minimax-m3 for nim + deepseek-v4-pro at v2", () => {
+		test("v2 nim + deepseek-v4-pro chains through v3 (m3) and v4 to minimax-m2.7", () => {
 			const result = loadSettingsFromRaw({
 				settingsVersion: 2,
 				activeProvider: "nim",
 				activeModel: "deepseek-ai/deepseek-v4-pro",
 			});
-			expect(result.settings.activeModel).toBe("minimaxai/minimax-m3");
+			expect(result.settings.activeModel).toBe("minimaxai/minimax-m2.7");
 			expect(result.settings.settingsVersion).toBe(SETTINGS_VERSION);
 			expect(result.migrated).toBe(true);
 		});
@@ -225,20 +225,63 @@ describe("loadSettingsFromRaw", () => {
 					triage: { providerId: "nim", model: "deepseek-ai/deepseek-v4-flash" },
 				},
 			});
-			expect(result.settings.activeModel).toBe("minimaxai/minimax-m3");
+			expect(result.settings.activeModel).toBe("minimaxai/minimax-m2.7");
 			expect(result.settings.taskModels.triage).toEqual({
 				providerId: "nim",
 				model: "deepseek-ai/deepseek-v4-flash",
 			});
 		});
 
-		test("already-v3 data with nim + deepseek-v4-pro is NOT re-migrated (rewrite is one-shot, not a standing guard)", () => {
+		test("already-current data with nim + deepseek-v4-pro is NOT re-migrated (rewrite is one-shot, not a standing guard)", () => {
 			const result = loadSettingsFromRaw({
 				settingsVersion: SETTINGS_VERSION,
 				activeProvider: "nim",
 				activeModel: "deepseek-ai/deepseek-v4-pro",
 			});
 			expect(result.settings.activeModel).toBe("deepseek-ai/deepseek-v4-pro");
+			expect(result.migrated).toBe(false);
+		});
+	});
+
+	describe("v3 -> v4: NIM minimax-m3 (DEGRADED endpoint) chat model rewrite", () => {
+		test("rewrites activeModel to minimax-m2.7 for nim + minimax-m3 at v3", () => {
+			const result = loadSettingsFromRaw({
+				settingsVersion: 3,
+				activeProvider: "nim",
+				activeModel: "minimaxai/minimax-m3",
+			});
+			expect(result.settings.activeModel).toBe("minimaxai/minimax-m2.7");
+			expect(result.settings.settingsVersion).toBe(SETTINGS_VERSION);
+			expect(result.migrated).toBe(true);
+		});
+
+		test("leaves a different NIM model untouched at v3", () => {
+			const result = loadSettingsFromRaw({
+				settingsVersion: 3,
+				activeProvider: "nim",
+				activeModel: "minimaxai/minimax-m2.7",
+			});
+			expect(result.settings.activeModel).toBe("minimaxai/minimax-m2.7");
+			expect(result.settings.settingsVersion).toBe(SETTINGS_VERSION);
+		});
+
+		test("leaves minimax-m3 on a non-NIM provider untouched", () => {
+			const result = loadSettingsFromRaw({
+				settingsVersion: 3,
+				activeProvider: "openai",
+				activeModel: "minimaxai/minimax-m3",
+			});
+			expect(result.settings.activeModel).toBe("minimaxai/minimax-m3");
+			expect(result.settings.settingsVersion).toBe(SETTINGS_VERSION);
+		});
+
+		test("already-v4 data with nim + minimax-m3 is NOT re-migrated (user may re-pick m3 deliberately)", () => {
+			const result = loadSettingsFromRaw({
+				settingsVersion: SETTINGS_VERSION,
+				activeProvider: "nim",
+				activeModel: "minimaxai/minimax-m3",
+			});
+			expect(result.settings.activeModel).toBe("minimaxai/minimax-m3");
 			expect(result.migrated).toBe(false);
 		});
 	});

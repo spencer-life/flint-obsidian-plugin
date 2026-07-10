@@ -163,7 +163,7 @@ export function migrateTaskModels(
 }
 
 /** Current `settingsVersion` written by this build. */
-export const SETTINGS_VERSION = 3;
+export const SETTINGS_VERSION = 4;
 
 export interface SettingsLoadResult {
 	settings: FlintSettings;
@@ -227,6 +227,20 @@ export function loadSettingsFromRaw(raw: unknown): SettingsLoadResult {
 			rawObj["activeModel"] === "deepseek-ai/deepseek-v4-pro"
 		) {
 			settings.activeModel = "minimaxai/minimax-m3";
+		}
+		migrated = true;
+	}
+
+	// v3 -> v4: minimax-m3 turned out DEGRADED on NIM's hosted endpoint
+	// (400 "DEGRADED function cannot be invoked", verified live 2026-07-10)
+	// while minimax-m2.7 answers fine — move to the working model. m3 stays
+	// selectable in the model dropdown for when NVIDIA restores it.
+	if (version < 4) {
+		if (
+			rawObj["activeProvider"] === "nim" &&
+			settings.activeModel === "minimaxai/minimax-m3"
+		) {
+			settings.activeModel = "minimaxai/minimax-m2.7";
 		}
 		migrated = true;
 	}
