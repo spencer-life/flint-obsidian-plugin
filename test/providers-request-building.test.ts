@@ -153,7 +153,7 @@ describe("NIM DeepSeek v4 quirks: chat_template_kwargs", () => {
 		});
 
 		await provider.chat([{ role: "user", content: "hi" }], {
-			model: "moonshotai/kimi-k2.6",
+			model: "minimaxai/minimax-m3",
 		});
 
 		const body = JSON.parse(requestUrlCalls[0]?.body ?? "{}");

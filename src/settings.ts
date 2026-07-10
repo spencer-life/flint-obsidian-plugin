@@ -226,7 +226,7 @@ export function loadSettingsFromRaw(raw: unknown): SettingsLoadResult {
 			rawObj["activeProvider"] === "nim" &&
 			rawObj["activeModel"] === "deepseek-ai/deepseek-v4-pro"
 		) {
-			settings.activeModel = "moonshotai/kimi-k2.6";
+			settings.activeModel = "minimaxai/minimax-m3";
 		}
 		migrated = true;
 	}
@@ -531,12 +531,12 @@ export class FlintSettingTab extends PluginSettingTab {
 
 		addTaskModelSetting(
 			"Triage model",
-			"Suggested: moonshotai/kimi-k2.6 (fast, strong JSON/instruction following)",
+			"Suggested: minimaxai/minimax-m2.7 (fast, strong JSON/instruction following)",
 			"triage",
 		);
 		addTaskModelSetting(
 			"Auto-organize model",
-			"Suggested: moonshotai/kimi-k2.6 (fast, strong JSON/instruction following)",
+			"Suggested: minimaxai/minimax-m2.7 (fast, strong JSON/instruction following)",
 			"organize",
 		);
 		addTaskModelSetting(

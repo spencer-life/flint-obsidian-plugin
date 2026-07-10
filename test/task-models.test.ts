@@ -30,10 +30,10 @@ describe("resolveTaskModel", () => {
 	test("falls back to activeModel on the active provider when the override is empty", () => {
 		const settings = cloneSettings();
 		settings.activeProvider = "nim";
-		settings.activeModel = "moonshotai/kimi-k2.6";
+		settings.activeModel = "minimaxai/minimax-m3";
 		expect(resolveTaskModel(settings, "triage")).toEqual({
 			providerId: "nim",
-			model: "moonshotai/kimi-k2.6",
+			model: "minimaxai/minimax-m3",
 		});
 	});
 
@@ -135,7 +135,7 @@ describe("loadSettingsFromRaw", () => {
 	test("legacy data (no settingsVersion): flips a live auto-apply off, seeds exclusions, migrates task models, stamps the version", () => {
 		const result = loadSettingsFromRaw({
 			activeProvider: "nim",
-			activeModel: "moonshotai/kimi-k2.6",
+			activeModel: "minimaxai/minimax-m3",
 			organizeAutoApply: true,
 			taskModels: {
 				triage: "deepseek-ai/deepseek-v4-flash",
@@ -185,13 +185,13 @@ describe("loadSettingsFromRaw", () => {
 	});
 
 	describe("v2 -> v3: NIM deepseek-v4-pro chat model rewrite", () => {
-		test("rewrites activeModel to kimi-k2.6 for nim + deepseek-v4-pro at v2", () => {
+		test("rewrites activeModel to minimax-m3 for nim + deepseek-v4-pro at v2", () => {
 			const result = loadSettingsFromRaw({
 				settingsVersion: 2,
 				activeProvider: "nim",
 				activeModel: "deepseek-ai/deepseek-v4-pro",
 			});
-			expect(result.settings.activeModel).toBe("moonshotai/kimi-k2.6");
+			expect(result.settings.activeModel).toBe("minimaxai/minimax-m3");
 			expect(result.settings.settingsVersion).toBe(SETTINGS_VERSION);
 			expect(result.migrated).toBe(true);
 		});
@@ -225,7 +225,7 @@ describe("loadSettingsFromRaw", () => {
 					triage: { providerId: "nim", model: "deepseek-ai/deepseek-v4-flash" },
 				},
 			});
-			expect(result.settings.activeModel).toBe("moonshotai/kimi-k2.6");
+			expect(result.settings.activeModel).toBe("minimaxai/minimax-m3");
 			expect(result.settings.taskModels.triage).toEqual({
 				providerId: "nim",
 				model: "deepseek-ai/deepseek-v4-flash",

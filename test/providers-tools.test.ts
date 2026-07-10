@@ -93,12 +93,12 @@ describe("byte-identical regression: plain string chats build the exact pre-tool
 				{ role: "system", content: "sys" },
 				{ role: "user", content: "hello" },
 			],
-			{ model: "moonshotai/kimi-k2.6", maxTokens: 128 },
+			{ model: "minimaxai/minimax-m3", maxTokens: 128 },
 		);
 
 		expect(requestUrlCalls[0]?.body).toBe(
 			JSON.stringify({
-				model: "moonshotai/kimi-k2.6",
+				model: "minimaxai/minimax-m3",
 				messages: [
 					{ role: "system", content: "sys" },
 					{ role: "user", content: "hello" },
@@ -277,7 +277,7 @@ describe("openai-compatible chatWithTools", () => {
 		const turn = await provider.chatWithTools(
 			[{ role: "user", content: "read A" }],
 			TOOLS,
-			{ model: "moonshotai/kimi-k2.6" },
+			{ model: "minimaxai/minimax-m3" },
 		);
 
 		const body = JSON.parse(requestUrlCalls[0]?.body ?? "{}");
@@ -317,7 +317,7 @@ describe("openai-compatible chatWithTools", () => {
 				{ role: "tool", toolCallId: "call_1", content: "aaa" },
 			],
 			TOOLS,
-			{ model: "moonshotai/kimi-k2.6" },
+			{ model: "minimaxai/minimax-m3" },
 		);
 
 		const body = JSON.parse(requestUrlCalls[0]?.body ?? "{}");
@@ -384,7 +384,7 @@ describe("openai-compatible chatWithTools", () => {
 		const turn = await provider.streamChatWithTools(
 			[{ role: "user", content: "read A" }],
 			TOOLS,
-			{ model: "moonshotai/kimi-k2.6" },
+			{ model: "minimaxai/minimax-m3" },
 			() => {},
 		);
 
@@ -433,7 +433,7 @@ describe("openai-compatible chatWithTools", () => {
 		const turn = await provider.streamChatWithTools(
 			[{ role: "user", content: "hi" }],
 			TOOLS,
-			{ model: "moonshotai/kimi-k2.6" },
+			{ model: "minimaxai/minimax-m3" },
 			() => {},
 		);
 
@@ -487,7 +487,7 @@ describe("reasoning-only streams and NIM DeepSeek quirks", () => {
 		const tokens: string[] = [];
 		const result = await provider.streamChat(
 			[{ role: "user", content: "hi" }],
-			{ model: "moonshotai/kimi-k2.6" },
+			{ model: "minimaxai/minimax-m3" },
 			(token) => tokens.push(token),
 		);
 
@@ -513,7 +513,7 @@ describe("reasoning-only streams and NIM DeepSeek quirks", () => {
 			provider.streamChatWithTools(
 				[{ role: "user", content: "hi" }],
 				TOOLS,
-				{ model: "moonshotai/kimi-k2.6" },
+				{ model: "minimaxai/minimax-m3" },
 				() => {},
 			),
 		).rejects.toBeInstanceOf(ReasoningOnlyError);
