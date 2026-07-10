@@ -1,4 +1,5 @@
 import {
+	type Debouncer,
 	debounce,
 	type Editor,
 	Notice,
@@ -58,6 +59,7 @@ export default class FlintPlugin extends Plugin {
 		2000,
 		true,
 	);
+	private vaultIndexFlushDebounced?: Debouncer<[], void>;
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
@@ -130,9 +132,11 @@ export default class FlintPlugin extends Plugin {
 		this.addCommand({
 			id: "apply-organize-suggestions",
 			name: "Apply organize suggestions",
-			editorCallback: (_editor, ctx) => {
-				if (!ctx.file) return;
+			editorCheckCallback: (checking, _editor, ctx) => {
+				if (!ctx.file) return false;
+				if (checking) return true;
 				void this.organizeService.runManualApply(ctx.file);
+				return true;
 			},
 		});
 
@@ -374,7 +378,7 @@ export default class FlintPlugin extends Plugin {
 	private registerVaultIndexEvents(): void {
 		const pendingPaths = new Set<string>();
 
-		const flush = debounce(
+		this.vaultIndexFlushDebounced = debounce(
 			() => {
 				const paths = Array.from(pendingPaths);
 				pendingPaths.clear();
@@ -396,7 +400,7 @@ export default class FlintPlugin extends Plugin {
 
 		const schedule = (path: string) => {
 			pendingPaths.add(path);
-			flush();
+			this.vaultIndexFlushDebounced?.();
 		};
 
 		this.registerEvent(
@@ -419,7 +423,11 @@ export default class FlintPlugin extends Plugin {
 	}
 
 	onunload(): void {
-		// STUB: no teardown needed yet (registerView is auto-cleaned by Obsidian).
+		// Cancel any pending vault-index flush so it doesn't fire after
+		// teardown, then flush a queued embeddings save (if one is pending)
+		// rather than losing it — `run()` only executes when a call is queued.
+		this.vaultIndexFlushDebounced?.cancel();
+		this.persistEmbeddingsDebounced.run();
 	}
 
 	/** Vault-relative path for the per-device embedding vector cache, stored

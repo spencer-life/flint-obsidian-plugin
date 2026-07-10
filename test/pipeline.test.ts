@@ -50,6 +50,11 @@ describe("buildSystemPrompt", () => {
 		const prompt = buildSystemPrompt([]);
 		expect(prompt).toContain("No relevant notes were found");
 	});
+
+	test("includes the Obsidian capabilities brief", () => {
+		const prompt = buildSystemPrompt([]);
+		expect(prompt).toContain("What Obsidian can render and do");
+	});
 });
 
 describe("neutralizeRemoteImageMarkdown", () => {
