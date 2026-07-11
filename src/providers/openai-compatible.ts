@@ -215,6 +215,21 @@ function extractErrorMessage(bodyText: string): string {
 	}
 }
 
+/**
+ * Read requestUrl's JSON body without throwing. Obsidian's `.json` getter runs
+ * JSON.parse on the raw body and throws a SyntaxError for any non-JSON response
+ * (e.g. a 503 rate-limit page). Unguarded, that SyntaxError propagated to the
+ * chat UI as a cryptic "JSON error". Returns undefined on failure so callers
+ * fall through to status-based handling using the raw body text.
+ */
+function safeJson<T>(response: { json: unknown }): T | undefined {
+	try {
+		return response.json as T;
+	} catch {
+		return undefined;
+	}
+}
+
 /** Raw streamed `delta.tool_calls` fragment: OpenAI splits one call's id/
  * name/argument JSON across many chunks, keyed by array index. */
 interface ToolCallFragment {
@@ -272,7 +287,11 @@ export class OpenAICompatibleProvider implements Provider {
 
 	async chat(messages: ChatMessage[], opts: ChatOptions): Promise<string> {
 		validateBaseUrl(this.config.baseUrl);
-		const quirks = nimDeepseekQuirks(this.config.baseUrl, opts.model, opts.reasoning);
+		const quirks = nimDeepseekQuirks(
+			this.config.baseUrl,
+			opts.model,
+			opts.reasoning,
+		);
 		const response = await requestUrl({
 			url: `${this.config.baseUrl}/chat/completions`,
 			method: "POST",
@@ -295,19 +314,21 @@ export class OpenAICompatibleProvider implements Provider {
 			throw: false,
 		});
 
-		const data = response.json as
-			| {
-					choices?: {
-						message?: { content?: string; reasoning_content?: string };
-					}[];
-					error?: { message?: string };
-					detail?: string;
-					message?: string;
-			  }
-			| undefined;
+		const data = safeJson<{
+			choices?: {
+				message?: { content?: string; reasoning_content?: string };
+			}[];
+			error?: { message?: string };
+			detail?: string;
+			message?: string;
+		}>(response);
 
 		if (response.status >= 400) {
-			const apiMsg = data?.error?.message ?? data?.detail ?? data?.message;
+			const apiMsg =
+				data?.error?.message ??
+				data?.detail ??
+				data?.message ??
+				extractErrorMessage(response.text);
 			throw new Error(
 				`Provider error (${response.status})${apiMsg ? `: ${apiMsg}` : ""}`,
 			);
@@ -334,7 +355,11 @@ export class OpenAICompatibleProvider implements Provider {
 		opts: ChatOptions,
 	): Promise<AssistantTurn> {
 		validateBaseUrl(this.config.baseUrl);
-		const quirks = nimDeepseekQuirks(this.config.baseUrl, opts.model, opts.reasoning);
+		const quirks = nimDeepseekQuirks(
+			this.config.baseUrl,
+			opts.model,
+			opts.reasoning,
+		);
 		const response = await requestUrl({
 			url: `${this.config.baseUrl}/chat/completions`,
 			method: "POST",
@@ -355,26 +380,27 @@ export class OpenAICompatibleProvider implements Provider {
 			throw: false,
 		});
 
-		const data = response.json as
-			| {
-					choices?: {
-						message?: {
-							content?: string | null;
-							tool_calls?: {
-								id?: string;
-								function?: { name?: string; arguments?: string };
-							}[];
-						};
+		const data = safeJson<{
+			choices?: {
+				message?: {
+					content?: string | null;
+					tool_calls?: {
+						id?: string;
+						function?: { name?: string; arguments?: string };
 					}[];
-					error?: { message?: string };
-					detail?: string;
-					message?: string;
-			  }
-			| undefined;
+				};
+			}[];
+			error?: { message?: string };
+			detail?: string;
+			message?: string;
+		}>(response);
 
 		if (response.status >= 400) {
 			const apiMsg =
-				data?.error?.message ?? data?.detail ?? data?.message ?? "";
+				data?.error?.message ??
+				data?.detail ??
+				data?.message ??
+				extractErrorMessage(response.text);
 			if (looksToolsUnsupported(response.status, apiMsg)) {
 				throw new ToolsUnsupportedError(
 					`Model "${opts.model}" rejected tool definitions: ${apiMsg}`,
@@ -398,10 +424,18 @@ export class OpenAICompatibleProvider implements Provider {
 				arguments: call.function.arguments ?? "",
 			});
 		}
-		return {
-			text: typeof message?.content === "string" ? message.content : "",
-			toolCalls,
-		};
+		const content = typeof message?.content === "string" ? message.content : "";
+		// Thinking models (e.g. GLM) can return only reasoning tokens — empty
+		// content and no tool calls. Surface that instead of a silent blank
+		// answer (mirrors chat() and streamChatWithTools()).
+		if (
+			content.length === 0 &&
+			toolCalls.length === 0 &&
+			(message as { reasoning_content?: string })?.reasoning_content
+		) {
+			throw reasoningOnlyError(opts.model);
+		}
+		return { text: content, toolCalls };
 	}
 
 	async listModels(): Promise<string[]> {
@@ -415,17 +449,19 @@ export class OpenAICompatibleProvider implements Provider {
 			throw: false,
 		});
 
-		const data = response.json as
-			| {
-					data?: { id?: string }[];
-					error?: { message?: string };
-					detail?: string;
-					message?: string;
-			  }
-			| undefined;
+		const data = safeJson<{
+			data?: { id?: string }[];
+			error?: { message?: string };
+			detail?: string;
+			message?: string;
+		}>(response);
 
 		if (response.status >= 400) {
-			const apiMsg = data?.error?.message ?? data?.detail ?? data?.message;
+			const apiMsg =
+				data?.error?.message ??
+				data?.detail ??
+				data?.message ??
+				extractErrorMessage(response.text);
 			throw new Error(
 				`Provider error (${response.status})${apiMsg ? `: ${apiMsg}` : ""}`,
 			);
@@ -446,7 +482,11 @@ export class OpenAICompatibleProvider implements Provider {
 		onToken: TokenHandler,
 	): Promise<string> {
 		validateBaseUrl(this.config.baseUrl);
-		const quirks = nimDeepseekQuirks(this.config.baseUrl, opts.model, opts.reasoning);
+		const quirks = nimDeepseekQuirks(
+			this.config.baseUrl,
+			opts.model,
+			opts.reasoning,
+		);
 		try {
 			const response = await fetch(`${this.config.baseUrl}/chat/completions`, {
 				method: "POST",
@@ -537,7 +577,11 @@ export class OpenAICompatibleProvider implements Provider {
 		onToken: TokenHandler,
 	): Promise<AssistantTurn> {
 		validateBaseUrl(this.config.baseUrl);
-		const quirks = nimDeepseekQuirks(this.config.baseUrl, opts.model, opts.reasoning);
+		const quirks = nimDeepseekQuirks(
+			this.config.baseUrl,
+			opts.model,
+			opts.reasoning,
+		);
 		if (quirks?.forceNonStreamingTools) {
 			// NIM's DeepSeek v4 streaming tool calls are unreliable model-side
 			// (NVIDIA forum #368085) — delegate to the guaranteed non-streaming

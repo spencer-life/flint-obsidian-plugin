@@ -1,6 +1,6 @@
 {
 	"name": "flint",
-	"version": "0.4.2",
+	"version": "0.4.3",
 	"description": "Portable AI + capture automation woven into your vault.",
 	"main": "main.js",
 	"type": "module",

@@ -656,10 +656,25 @@ export function FlintPanel() {
 				...result.appended,
 			];
 
-			patchAssistant(assistantId, (message) => ({
-				...message,
-				content: result.text,
-			}));
+			patchAssistant(assistantId, (message) => {
+				// Agent-mode messages render from `parts`, not `content`. When the
+				// final answer arrives non-streamed (onToken never fired — e.g.
+				// streaming disabled or a provider that falls back to a whole-body
+				// response), `parts` has no text part and the answer would be
+				// silently dropped from the UI. Mirror onToken: ensure the final
+				// text lands in `parts` so it actually renders.
+				if (!message.parts) {
+					return { ...message, content: result.text };
+				}
+				const parts = [...message.parts];
+				const last = parts[parts.length - 1];
+				if (last?.type === "text") {
+					parts[parts.length - 1] = { type: "text", text: result.text };
+				} else if (result.text.length > 0) {
+					parts.push({ type: "text", text: result.text });
+				}
+				return { ...message, content: result.text, parts };
+			});
 		},
 		[app, plugin, patchAssistant, patchToolCard],
 	);
