@@ -28,6 +28,11 @@ import { ToolsUnsupportedError } from "../providers/types";
 import { type ProviderId, resolveTaskModel } from "../settings";
 import { ModelSuggest } from "../ui/model-suggest";
 import { NotePickerModal } from "../ui/note-picker";
+import {
+	budgetAgentTranscript,
+	budgetChatHistory,
+	describeError,
+} from "./chat-helpers";
 import { useApp, usePlugin } from "./context";
 import { Suggestions } from "./Suggestions";
 import { ToolCard, type ToolCardState } from "./ToolCard";
@@ -117,6 +122,13 @@ interface ImageAttachment {
 	base64: string;
 }
 
+/** Query + attachments that produced a failed send — enough to resend the
+ * exact same turn from a "Retry" click. */
+interface RetryPayload {
+	query: string;
+	images: ImageAttachment[];
+}
+
 interface FlintMessage {
 	id: string;
 	role: "user" | "assistant";
@@ -128,6 +140,12 @@ interface FlintMessage {
 	images?: ImageAttachment[];
 	citations?: string[];
 	isError?: boolean;
+	/** Set on a failed send — renders a "Retry" button that resends the
+	 * original query/images unchanged. */
+	retry?: RetryPayload;
+	/** Non-error, explanatory banner shown above an assistant message — e.g.
+	 * agent mode silently degraded to read-only for this turn. */
+	notice?: string;
 }
 
 let messageCounter = 0;
@@ -146,17 +164,6 @@ function toContentParts(images: ImageAttachment[]): ContentPart[] {
 			base64: image.base64,
 		}),
 	);
-}
-
-function describeError(err: unknown): string {
-	const message = err instanceof Error ? err.message : String(err);
-	if (/image|vision|multimodal|multi-modal/i.test(message)) {
-		return `This model can't read images — try a vision-capable model. (${message})`;
-	}
-	if (/\b404\b/.test(message)) {
-		return `Model not found (404) — check the model id. Some provider models are deprecated or renamed. (${message})`;
-	}
-	return message;
 }
 
 /** Pretty proposal body for a tool card from the raw argument JSON — plain
@@ -227,6 +234,26 @@ function Citations({ paths }: { paths: string[] }) {
 				</a>
 			))}
 		</div>
+	);
+}
+
+/** Resends the exact query/images that failed — attached to an error
+ * message's `retry` field. */
+function RetryButton({
+	retry,
+	onRetry,
+}: {
+	retry: RetryPayload;
+	onRetry: (retry: RetryPayload) => void;
+}) {
+	return (
+		<button
+			type="button"
+			className="flint-retry-btn"
+			onClick={() => onRetry(retry)}
+		>
+			Retry
+		</button>
 	);
 }
 
@@ -538,6 +565,9 @@ export function FlintPanel() {
 				role: "user",
 				content: userContent,
 			};
+			// Outbound-only budget: bounds what's SENT to the model, never what's
+			// rendered — `agentTranscriptRef.current` itself keeps growing until
+			// "Clear conversation" resets it.
 			const transcript: AgentMessage[] = [
 				{
 					role: "system",
@@ -547,7 +577,7 @@ export function FlintPanel() {
 						settings,
 					}),
 				},
-				...agentTranscriptRef.current,
+				...budgetAgentTranscript(agentTranscriptRef.current),
 				userAgentMessage,
 			];
 
@@ -679,136 +709,189 @@ export function FlintPanel() {
 		[app, plugin, patchAssistant, patchToolCard],
 	);
 
-	const handleSend = useCallback(async () => {
-		const query = input.trim();
-		const images = imageAttachments;
-		if ((!query && images.length === 0) || isSending) return;
+	const handleSend = useCallback(
+		async (retryPayload?: RetryPayload) => {
+			const query = retryPayload ? retryPayload.query : input.trim();
+			const images = retryPayload ? retryPayload.images : imageAttachments;
+			if ((!query && images.length === 0) || isSending) return;
 
-		setInput("");
-		setImageAttachments([]);
-		setError(null);
-
-		const history: ChatMessage[] = messages
-			.filter((m) => !m.isError)
-			.map((m) => ({ role: m.role, content: m.content }));
-
-		const userMessage: FlintMessage = {
-			id: nextId(),
-			role: "user",
-			content: query,
-			...(images.length > 0 ? { images } : {}),
-		};
-		const assistantId = nextId();
-		const assistantMessage: FlintMessage = {
-			id: assistantId,
-			role: "assistant",
-			content: "",
-			...(agentMode ? { parts: [] } : {}),
-		};
-
-		setMessages((prev) => [...prev, userMessage, assistantMessage]);
-		setIsSending(true);
-
-		const controller = new AbortController();
-		abortRef.current = controller;
-
-		try {
-			if (agentMode) {
-				try {
-					await sendAgent(query, images, assistantId, controller);
-					return;
-				} catch (err) {
-					if (!(err instanceof ToolsUnsupportedError)) throw err;
-					// Model can't do tools — tell the user once and degrade to the
-					// read-only RAG pipeline for this send.
-					new Notice(
-						`Flint: ${plugin.settings.activeModel} doesn't support tools — answering read-only. Pick a function-calling model for agent mode.`,
-						8000,
-					);
-					patchAssistant(assistantId, (message) => ({
-						...message,
-						parts: undefined,
-					}));
-				}
+			// A retry resends the ORIGINAL failed turn, not whatever's currently
+			// drafted in the composer — leave input/attachments alone so a
+			// new draft the user typed in the meantime survives.
+			if (!retryPayload) {
+				setInput("");
+				setImageAttachments([]);
 			}
+			setError(null);
 
-			const result = await runPipeline(
-				query,
-				plugin.settings,
-				plugin.vaultIndex,
-				{
-					history,
-					stream: plugin.settings.streamResponses,
-					signal: controller.signal,
-					pinnedPaths: attachments.map((file) => file.path),
-					app,
-					images: toContentParts(images),
-					onToken: (token) => {
-						setMessages((prev) =>
-							prev.map((m) =>
-								m.id === assistantId ? { ...m, content: m.content + token } : m,
-							),
-						);
+			const history: ChatMessage[] = budgetChatHistory(
+				messages
+					.filter((m) => !m.isError)
+					.map((m) => ({ role: m.role, content: m.content })),
+			);
+
+			const userMessage: FlintMessage = {
+				id: nextId(),
+				role: "user",
+				content: query,
+				...(images.length > 0 ? { images } : {}),
+			};
+			const assistantId = nextId();
+			const assistantMessage: FlintMessage = {
+				id: assistantId,
+				role: "assistant",
+				content: "",
+				...(agentMode ? { parts: [] } : {}),
+			};
+
+			setMessages((prev) => [...prev, userMessage, assistantMessage]);
+			setIsSending(true);
+
+			const controller = new AbortController();
+			abortRef.current = controller;
+
+			try {
+				if (agentMode) {
+					try {
+						await sendAgent(query, images, assistantId, controller);
+						return;
+					} catch (err) {
+						if (!(err instanceof ToolsUnsupportedError)) throw err;
+						// Model can't do tools — tell the user once (both as a toast
+						// and as a persistent banner on the answer, so degrading to
+						// read-only is never silent) and fall back to the RAG pipeline
+						// for this send.
+						const noticeText =
+							images.length > 0
+								? "The vision model can't use tools — answered read-only. For actions on an image, describe what you want in text."
+								: `${plugin.settings.activeModel} doesn't support tools — answering read-only. Pick a function-calling model for agent mode.`;
+						new Notice(`Flint: ${noticeText}`, 8000);
+						patchAssistant(assistantId, (message) => ({
+							...message,
+							parts: undefined,
+							notice: noticeText,
+						}));
+					}
+				}
+
+				const result = await runPipeline(
+					query,
+					plugin.settings,
+					plugin.vaultIndex,
+					{
+						history,
+						stream: plugin.settings.streamResponses,
+						signal: controller.signal,
+						pinnedPaths: attachments.map((file) => file.path),
+						app,
+						images: toContentParts(images),
+						onToken: (token) => {
+							setMessages((prev) =>
+								prev.map((m) =>
+									m.id === assistantId
+										? { ...m, content: m.content + token }
+										: m,
+								),
+							);
+						},
 					},
-				},
-			);
-
-			setMessages((prev) =>
-				prev.map((m) =>
-					m.id === assistantId
-						? { ...m, content: result.answer, citations: result.citations }
-						: m,
-				),
-			);
-		} catch (err) {
-			if (err instanceof DOMException && err.name === "AbortError") {
-				setMessages((prev) =>
-					prev.map((m) =>
-						m.id === assistantId && m.content.length === 0
-							? { ...m, content: "(stopped)" }
-							: m,
-					),
 				);
-			} else {
-				const message = describeError(err);
-				setError(message);
+
 				setMessages((prev) =>
 					prev.map((m) =>
 						m.id === assistantId
-							? { ...m, content: message, isError: true, parts: undefined }
+							? { ...m, content: result.answer, citations: result.citations }
 							: m,
 					),
 				);
+			} catch (err) {
+				if (err instanceof DOMException && err.name === "AbortError") {
+					setMessages((prev) =>
+						prev.map((m) =>
+							m.id === assistantId && m.content.length === 0
+								? { ...m, content: "(stopped)" }
+								: m,
+						),
+					);
+				} else {
+					const message = describeError(err);
+					setError(message);
+					// Preserve the failed turn: restore the composer (unless this
+					// was already a retry — don't clobber a newer draft) and attach
+					// a Retry affordance to the error bubble either way.
+					if (!retryPayload) {
+						setInput(query);
+						setImageAttachments(images);
+					}
+					setMessages((prev) =>
+						prev.map((m) =>
+							m.id === assistantId
+								? {
+										...m,
+										content: message,
+										isError: true,
+										parts: undefined,
+										retry: { query, images },
+									}
+								: m,
+						),
+					);
+				}
+			} finally {
+				setIsSending(false);
+				abortRef.current = null;
 			}
-		} finally {
-			setIsSending(false);
-			abortRef.current = null;
-		}
-	}, [
-		input,
-		imageAttachments,
-		isSending,
-		messages,
-		plugin,
-		attachments,
-		app,
-		agentMode,
-		sendAgent,
-		patchAssistant,
-	]);
+		},
+		[
+			input,
+			imageAttachments,
+			isSending,
+			messages,
+			plugin,
+			attachments,
+			app,
+			agentMode,
+			sendAgent,
+			patchAssistant,
+		],
+	);
+
+	const handleRetry = useCallback(
+		(retry: RetryPayload) => {
+			void handleSend(retry);
+		},
+		[handleSend],
+	);
+
+	const handleClear = useCallback(() => {
+		setMessages([]);
+		setError(null);
+		agentTranscriptRef.current = [];
+	}, []);
 
 	return (
 		<div className="flint-panel">
 			<div className="flint-header">
 				<span className="flint-title">Flint</span>
-				<button
-					type="button"
-					className="flint-test-btn"
-					onClick={() => void handleTestConnection()}
-					disabled={testStatus === "testing"}
-				>
-					{testStatus === "testing" ? "Testing…" : "Test"}
-				</button>
+				<div className="flint-header-buttons">
+					<button
+						type="button"
+						className="flint-clear-btn"
+						onClick={handleClear}
+						disabled={isSending || messages.length === 0}
+						title="Clear conversation"
+					>
+						Clear
+					</button>
+					<button
+						type="button"
+						className="flint-test-btn"
+						onClick={() => void handleTestConnection()}
+						disabled={testStatus === "testing"}
+					>
+						{testStatus === "testing" ? "Testing…" : "Test"}
+					</button>
+				</div>
 			</div>
 
 			{testStatus !== "idle" && (
@@ -826,6 +909,9 @@ export function FlintPanel() {
 						key={m.id}
 						className={`flint-message flint-message-${m.role}${m.isError ? " flint-message-error" : ""}`}
 					>
+						{m.role === "assistant" && m.notice && (
+							<div className="flint-notice">{m.notice}</div>
+						)}
 						{m.role === "assistant" ? (
 							m.parts ? (
 								<div className="flint-parts">
@@ -869,6 +955,9 @@ export function FlintPanel() {
 						)}
 						{m.citations && m.citations.length > 0 && (
 							<Citations paths={m.citations} />
+						)}
+						{m.isError && m.retry && (
+							<RetryButton retry={m.retry} onRetry={handleRetry} />
 						)}
 					</div>
 				))}

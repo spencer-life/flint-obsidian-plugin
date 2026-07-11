@@ -19,6 +19,12 @@
 	flex-wrap: wrap;
 }
 
+.flint-header-buttons {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-2);
+}
+
 .flint-title {
 	font-weight: 600;
 }
@@ -103,6 +109,24 @@
 .flint-error {
 	color: var(--text-error);
 	font-size: var(--font-ui-smaller);
+}
+
+.flint-notice {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	font-style: italic;
+	margin-bottom: var(--size-4-2);
+}
+
+.flint-retry-btn {
+	margin-top: var(--size-4-2);
+	cursor: pointer;
+	border: 1px solid var(--flint-accent);
+	color: var(--flint-accent);
+	background: transparent;
+	border-radius: var(--radius-s);
+	font-size: var(--font-ui-smaller);
+	padding: var(--size-4-1) var(--size-4-3);
 }
 
 .flint-composer {
