@@ -1,4 +1,5 @@
 import { requestUrl } from "obsidian";
+import { withDeadline } from "./deadline";
 import { consumeSSEStream } from "./sse";
 import type {
 	AgentMessage,
@@ -21,6 +22,12 @@ const MAX_MODEL_PAGES = 5;
 
 /** How much of an HTTP error body reaches a thrown message. */
 const ERROR_BODY_CHARS = 300;
+
+/** Deadline for a single chat/agent call (non-streaming or time-to-first-byte
+ * for streaming) — see `withDeadline`. */
+const CHAT_TIMEOUT_MS = 90_000;
+/** Deadline for the model-list lookup (per page). */
+const LIST_TIMEOUT_MS = 20_000;
 
 export interface AnthropicConfig {
 	apiKey: string;
@@ -273,13 +280,16 @@ export class AnthropicProvider implements Provider {
 	}
 
 	async chat(messages: ChatMessage[], opts: ChatOptions): Promise<string> {
-		const response = await requestUrl({
-			url: ANTHROPIC_API_URL,
-			method: "POST",
-			headers: this.headers(false),
-			body: JSON.stringify(this.buildBody(messages, opts, false)),
-			throw: false,
-		});
+		const response = await withDeadline(
+			requestUrl({
+				url: ANTHROPIC_API_URL,
+				method: "POST",
+				headers: this.headers(false),
+				body: JSON.stringify(this.buildBody(messages, opts, false)),
+				throw: false,
+			}),
+			{ signal: opts.signal, ms: CHAT_TIMEOUT_MS, label: "Chat request" },
+		);
 
 		const data = response.json as
 			| {
@@ -307,13 +317,16 @@ export class AnthropicProvider implements Provider {
 		tools: ToolDefinition[],
 		opts: ChatOptions,
 	): Promise<AssistantTurn> {
-		const response = await requestUrl({
-			url: ANTHROPIC_API_URL,
-			method: "POST",
-			headers: this.headers(false),
-			body: JSON.stringify(this.buildAgentBody(messages, tools, opts, false)),
-			throw: false,
-		});
+		const response = await withDeadline(
+			requestUrl({
+				url: ANTHROPIC_API_URL,
+				method: "POST",
+				headers: this.headers(false),
+				body: JSON.stringify(this.buildAgentBody(messages, tools, opts, false)),
+				throw: false,
+			}),
+			{ signal: opts.signal, ms: CHAT_TIMEOUT_MS, label: "Agent request" },
+		);
 
 		const data = response.json as
 			| {
@@ -369,15 +382,18 @@ export class AnthropicProvider implements Provider {
 				? `${ANTHROPIC_MODELS_URL}?limit=1000&after_id=${encodeURIComponent(afterId)}`
 				: `${ANTHROPIC_MODELS_URL}?limit=1000`;
 
-			const response = await requestUrl({
-				url,
-				method: "GET",
-				headers: {
-					"x-api-key": this.config.apiKey,
-					"anthropic-version": ANTHROPIC_VERSION,
-				},
-				throw: false,
-			});
+			const response = await withDeadline(
+				requestUrl({
+					url,
+					method: "GET",
+					headers: {
+						"x-api-key": this.config.apiKey,
+						"anthropic-version": ANTHROPIC_VERSION,
+					},
+					throw: false,
+				}),
+				{ ms: LIST_TIMEOUT_MS, label: "Model list" },
+			);
 
 			const data = response.json as
 				| {
@@ -412,12 +428,15 @@ export class AnthropicProvider implements Provider {
 		onToken: TokenHandler,
 	): Promise<string> {
 		try {
-			const response = await fetch(ANTHROPIC_API_URL, {
-				method: "POST",
-				headers: this.headers(true),
-				body: JSON.stringify(this.buildBody(messages, opts, true)),
-				signal: opts.signal,
-			});
+			const response = await withDeadline(
+				fetch(ANTHROPIC_API_URL, {
+					method: "POST",
+					headers: this.headers(true),
+					body: JSON.stringify(this.buildBody(messages, opts, true)),
+					signal: opts.signal,
+				}),
+				{ signal: opts.signal, ms: CHAT_TIMEOUT_MS, label: "Chat stream" },
+			);
 
 			if (!response.ok) {
 				// Read the body for an honest reason (it's consumed either way);
@@ -482,12 +501,17 @@ export class AnthropicProvider implements Provider {
 		onToken: TokenHandler,
 	): Promise<AssistantTurn> {
 		try {
-			const response = await fetch(ANTHROPIC_API_URL, {
-				method: "POST",
-				headers: this.headers(true),
-				body: JSON.stringify(this.buildAgentBody(messages, tools, opts, true)),
-				signal: opts.signal,
-			});
+			const response = await withDeadline(
+				fetch(ANTHROPIC_API_URL, {
+					method: "POST",
+					headers: this.headers(true),
+					body: JSON.stringify(
+						this.buildAgentBody(messages, tools, opts, true),
+					),
+					signal: opts.signal,
+				}),
+				{ signal: opts.signal, ms: CHAT_TIMEOUT_MS, label: "Chat stream" },
+			);
 
 			if (!response.ok) {
 				// The tools-unsupported decision NEEDS the body — the old

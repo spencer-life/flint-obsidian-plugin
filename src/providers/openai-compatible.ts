@@ -1,4 +1,5 @@
 import { requestUrl } from "obsidian";
+import { withDeadline } from "./deadline";
 import { consumeSSEStream } from "./sse";
 import type {
 	AgentMessage,
@@ -17,6 +18,12 @@ export const NIM_BASE_URL = "https://integrate.api.nvidia.com/v1";
 
 /** How much of an HTTP error body reaches a thrown message. */
 const ERROR_BODY_CHARS = 300;
+
+/** Deadline for a single chat/agent call (non-streaming or time-to-first-byte
+ * for streaming) — see `withDeadline`. */
+const CHAT_TIMEOUT_MS = 90_000;
+/** Deadline for the model-list lookup. */
+const LIST_TIMEOUT_MS = 20_000;
 
 export interface OpenAICompatibleConfig {
 	baseUrl: string;
@@ -292,27 +299,30 @@ export class OpenAICompatibleProvider implements Provider {
 			opts.model,
 			opts.reasoning,
 		);
-		const response = await requestUrl({
-			url: `${this.config.baseUrl}/chat/completions`,
-			method: "POST",
-			headers: {
-				Authorization: `Bearer ${this.config.apiKey}`,
-				"Content-Type": "application/json",
-			},
-			body: JSON.stringify({
-				model: opts.model,
-				messages: messages.map((message) => ({
-					role: message.role,
-					content: toOpenAIContent(message.content),
-				})),
-				max_tokens: opts.maxTokens,
-				temperature: opts.temperature,
-				top_p: opts.topP,
-				seed: opts.seed,
-				...(quirks?.extraBody ?? {}),
+		const response = await withDeadline(
+			requestUrl({
+				url: `${this.config.baseUrl}/chat/completions`,
+				method: "POST",
+				headers: {
+					Authorization: `Bearer ${this.config.apiKey}`,
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify({
+					model: opts.model,
+					messages: messages.map((message) => ({
+						role: message.role,
+						content: toOpenAIContent(message.content),
+					})),
+					max_tokens: opts.maxTokens,
+					temperature: opts.temperature,
+					top_p: opts.topP,
+					seed: opts.seed,
+					...(quirks?.extraBody ?? {}),
+				}),
+				throw: false,
 			}),
-			throw: false,
-		});
+			{ signal: opts.signal, ms: CHAT_TIMEOUT_MS, label: "Chat request" },
+		);
 
 		const data = safeJson<{
 			choices?: {
@@ -360,25 +370,28 @@ export class OpenAICompatibleProvider implements Provider {
 			opts.model,
 			opts.reasoning,
 		);
-		const response = await requestUrl({
-			url: `${this.config.baseUrl}/chat/completions`,
-			method: "POST",
-			headers: {
-				Authorization: `Bearer ${this.config.apiKey}`,
-				"Content-Type": "application/json",
-			},
-			body: JSON.stringify({
-				model: opts.model,
-				messages: toOpenAIAgentMessages(messages),
-				max_tokens: opts.maxTokens,
-				temperature: opts.temperature,
-				top_p: opts.topP,
-				seed: opts.seed,
-				...(tools.length > 0 ? { tools: toOpenAITools(tools) } : {}),
-				...(quirks?.extraBody ?? {}),
+		const response = await withDeadline(
+			requestUrl({
+				url: `${this.config.baseUrl}/chat/completions`,
+				method: "POST",
+				headers: {
+					Authorization: `Bearer ${this.config.apiKey}`,
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify({
+					model: opts.model,
+					messages: toOpenAIAgentMessages(messages),
+					max_tokens: opts.maxTokens,
+					temperature: opts.temperature,
+					top_p: opts.topP,
+					seed: opts.seed,
+					...(tools.length > 0 ? { tools: toOpenAITools(tools) } : {}),
+					...(quirks?.extraBody ?? {}),
+				}),
+				throw: false,
 			}),
-			throw: false,
-		});
+			{ signal: opts.signal, ms: CHAT_TIMEOUT_MS, label: "Agent request" },
+		);
 
 		const data = safeJson<{
 			choices?: {
@@ -440,14 +453,17 @@ export class OpenAICompatibleProvider implements Provider {
 
 	async listModels(): Promise<string[]> {
 		validateBaseUrl(this.config.baseUrl);
-		const response = await requestUrl({
-			url: `${this.config.baseUrl}/models`,
-			method: "GET",
-			headers: {
-				Authorization: `Bearer ${this.config.apiKey}`,
-			},
-			throw: false,
-		});
+		const response = await withDeadline(
+			requestUrl({
+				url: `${this.config.baseUrl}/models`,
+				method: "GET",
+				headers: {
+					Authorization: `Bearer ${this.config.apiKey}`,
+				},
+				throw: false,
+			}),
+			{ ms: LIST_TIMEOUT_MS, label: "Model list" },
+		);
 
 		const data = safeJson<{
 			data?: { id?: string }[];
@@ -488,27 +504,30 @@ export class OpenAICompatibleProvider implements Provider {
 			opts.reasoning,
 		);
 		try {
-			const response = await fetch(`${this.config.baseUrl}/chat/completions`, {
-				method: "POST",
-				headers: {
-					Authorization: `Bearer ${this.config.apiKey}`,
-					"Content-Type": "application/json",
-				},
-				body: JSON.stringify({
-					model: opts.model,
-					messages: messages.map((message) => ({
-						role: message.role,
-						content: toOpenAIContent(message.content),
-					})),
-					max_tokens: opts.maxTokens,
-					temperature: opts.temperature,
-					top_p: opts.topP,
-					seed: opts.seed,
-					stream: true,
-					...(quirks?.extraBody ?? {}),
+			const response = await withDeadline(
+				fetch(`${this.config.baseUrl}/chat/completions`, {
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${this.config.apiKey}`,
+						"Content-Type": "application/json",
+					},
+					body: JSON.stringify({
+						model: opts.model,
+						messages: messages.map((message) => ({
+							role: message.role,
+							content: toOpenAIContent(message.content),
+						})),
+						max_tokens: opts.maxTokens,
+						temperature: opts.temperature,
+						top_p: opts.topP,
+						seed: opts.seed,
+						stream: true,
+						...(quirks?.extraBody ?? {}),
+					}),
+					signal: opts.signal,
 				}),
-				signal: opts.signal,
-			});
+				{ signal: opts.signal, ms: CHAT_TIMEOUT_MS, label: "Chat stream" },
+			);
 
 			if (!response.ok) {
 				// Read the body for an honest reason (it's consumed either way);
@@ -591,24 +610,27 @@ export class OpenAICompatibleProvider implements Provider {
 			return turn;
 		}
 		try {
-			const response = await fetch(`${this.config.baseUrl}/chat/completions`, {
-				method: "POST",
-				headers: {
-					Authorization: `Bearer ${this.config.apiKey}`,
-					"Content-Type": "application/json",
-				},
-				body: JSON.stringify({
-					model: opts.model,
-					messages: toOpenAIAgentMessages(messages),
-					max_tokens: opts.maxTokens,
-					temperature: opts.temperature,
-					top_p: opts.topP,
-					seed: opts.seed,
-					...(tools.length > 0 ? { tools: toOpenAITools(tools) } : {}),
-					stream: true,
+			const response = await withDeadline(
+				fetch(`${this.config.baseUrl}/chat/completions`, {
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${this.config.apiKey}`,
+						"Content-Type": "application/json",
+					},
+					body: JSON.stringify({
+						model: opts.model,
+						messages: toOpenAIAgentMessages(messages),
+						max_tokens: opts.maxTokens,
+						temperature: opts.temperature,
+						top_p: opts.topP,
+						seed: opts.seed,
+						...(tools.length > 0 ? { tools: toOpenAITools(tools) } : {}),
+						stream: true,
+					}),
+					signal: opts.signal,
 				}),
-				signal: opts.signal,
-			});
+				{ signal: opts.signal, ms: CHAT_TIMEOUT_MS, label: "Chat stream" },
+			);
 
 			if (!response.ok) {
 				// The tools-unsupported decision NEEDS the body — the old

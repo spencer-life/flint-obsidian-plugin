@@ -1,6 +1,9 @@
 import { requestUrl } from "obsidian";
 import type { FlintSettings } from "../settings";
+import { withDeadline } from "./deadline";
 import { NIM_BASE_URL, validateBaseUrl } from "./openai-compatible";
+
+const EMBED_TIMEOUT_MS = 30_000;
 
 export interface EmbedOptions {
 	model: string;
@@ -83,16 +86,19 @@ export class OpenAICompatibleEmbeddings implements EmbeddingProvider {
 		};
 		if (opts.dimensions !== undefined) body.dimensions = opts.dimensions;
 
-		const response = await requestUrl({
-			url: `${this.config.baseUrl}/embeddings`,
-			method: "POST",
-			headers: {
-				Authorization: `Bearer ${this.config.apiKey}`,
-				"Content-Type": "application/json",
-			},
-			body: JSON.stringify(body),
-			throw: false,
-		});
+		const response = await withDeadline(
+			requestUrl({
+				url: `${this.config.baseUrl}/embeddings`,
+				method: "POST",
+				headers: {
+					Authorization: `Bearer ${this.config.apiKey}`,
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify(body),
+				throw: false,
+			}),
+			{ signal: opts.signal, ms: EMBED_TIMEOUT_MS, label: "Embedding request" },
+		);
 
 		const data = response.json as
 			| {
