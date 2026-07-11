@@ -31,8 +31,8 @@ function indexSettings() {
 }
 
 describe("buildSystemPrompt", () => {
-	test("cites retrieved chunk paths and includes their text", () => {
-		const prompt = buildSystemPrompt([
+	test("labels retrieved chunks with a numeric source ID and includes their text", () => {
+		const { prompt, sources } = buildSystemPrompt([
 			{
 				id: "a#0",
 				path: "01 Projects/rocket.md",
@@ -41,19 +41,48 @@ describe("buildSystemPrompt", () => {
 			},
 		]);
 
-		expect(prompt).toContain("01 Projects/rocket.md");
+		expect(prompt).toContain("[1] 01 Projects/rocket.md");
 		expect(prompt).toContain("Fuel");
 		expect(prompt).toContain("Liquid fuel is dense.");
+		expect(sources.get(1)).toBe("01 Projects/rocket.md");
 	});
 
 	test("says plainly when no notes were found", () => {
-		const prompt = buildSystemPrompt([]);
+		const { prompt } = buildSystemPrompt([]);
 		expect(prompt).toContain("No relevant notes were found");
 	});
 
 	test("does not include the Obsidian capabilities catalog (read-only prompt, no write manual needed)", () => {
-		const prompt = buildSystemPrompt([]);
+		const { prompt } = buildSystemPrompt([]);
 		expect(prompt).not.toContain("What Obsidian can render and do");
+	});
+
+	test("numbers pinned notes before chunks, continuing the same counter", () => {
+		const { sources } = buildSystemPrompt(
+			[
+				{
+					id: "a#0",
+					path: "01 Projects/rocket.md",
+					heading: "Fuel",
+					text: "Liquid fuel is dense.",
+				},
+			],
+			[{ path: "Pinned/attached-note.md", text: "Attached content." }],
+		);
+
+		expect(sources.get(1)).toBe("Pinned/attached-note.md");
+		expect(sources.get(2)).toBe("01 Projects/rocket.md");
+	});
+
+	test("instructs the model to cite only supplied source IDs, and to say when a claim is general knowledge", () => {
+		const { prompt } = buildSystemPrompt([]);
+		expect(prompt).toContain(
+			"For each vault-grounded claim, cite only its supplied source ID as [n].",
+		);
+		expect(prompt).toContain("Do not cite an ID you did not use.");
+		expect(prompt).toContain(
+			"If no supplied source supports a claim, say that it is general knowledge.",
+		);
 	});
 });
 
@@ -102,7 +131,7 @@ describe("neutralizeRemoteImageMarkdown", () => {
 });
 
 describe("runPipeline", () => {
-	test("retrieves vault chunks, cites their paths, and calls the configured provider", async () => {
+	test("retrieves vault chunks, cites only the source IDs the model actually used, and calls the configured provider", async () => {
 		const app = createFakeApp([
 			{
 				path: "01 Projects/rocket.md",
@@ -118,7 +147,7 @@ describe("runPipeline", () => {
 		await index.build();
 
 		setRequestUrlHandler(() => ({
-			json: { content: [{ text: "Here is the answer." }] },
+			json: { content: [{ text: "Here is the answer. [1]" }] },
 		}));
 
 		const settings = cloneSettings();
@@ -128,7 +157,7 @@ describe("runPipeline", () => {
 
 		const result = await runPipeline("rocket engine fuel", settings, index);
 
-		expect(result.answer).toBe("Here is the answer.");
+		expect(result.answer).toBe("Here is the answer. [1]");
 		expect(result.citations).toEqual(["01 Projects/rocket.md"]);
 
 		// Hit the Anthropic endpoint (provider selection from settings).
@@ -185,7 +214,7 @@ describe("runPipeline", () => {
 		await index.build();
 
 		setRequestUrlHandler(() => ({
-			json: { content: [{ text: "Here is the answer." }] },
+			json: { content: [{ text: "Here is the answer, see [1] and [2]." }] },
 		}));
 
 		const settings = cloneSettings();
@@ -197,8 +226,12 @@ describe("runPipeline", () => {
 			app,
 		});
 
-		expect(result.citations).toContain("Pinned/attached-note.md");
-		expect(result.citations).toContain("01 Projects/rocket.md");
+		// Pinned notes are numbered before retrieved chunks (buildSystemPrompt's
+		// counter), so [1] is the pinned note and [2] is the retrieved chunk.
+		expect(result.citations).toEqual([
+			"Pinned/attached-note.md",
+			"01 Projects/rocket.md",
+		]);
 
 		const body = JSON.parse(requestUrlCalls[0]?.body ?? "{}");
 		expect(body.system).toContain("User-attached notes");
@@ -291,6 +324,85 @@ describe("runPipeline", () => {
 			{ role: "assistant", content: "first answer" },
 			{ role: "user", content: "follow-up question" },
 		]);
+	});
+
+	describe("evidence-based citations", () => {
+		// Five vault notes that all match the keyword query, so retrieval
+		// returns all five chunks and assigns them stable source IDs 1..5
+		// (in whatever order VaultIndex.retrieve ranks them).
+		async function fiveChunkIndex() {
+			const app = createFakeApp([
+				{ path: "Notes/one.md", content: "# One\nWidget alpha content." },
+				{ path: "Notes/two.md", content: "# Two\nWidget beta content." },
+				{ path: "Notes/three.md", content: "# Three\nWidget gamma content." },
+				{ path: "Notes/four.md", content: "# Four\nWidget delta content." },
+				{ path: "Notes/five.md", content: "# Five\nWidget epsilon content." },
+			]);
+			const index = new VaultIndex(app, [], indexSettings());
+			await index.build();
+			const chunks = await index.retrieve("widget", 5);
+			const paths = chunks.map((chunk) => chunk.path);
+			return { index, paths };
+		}
+
+		test("cites only the [n] IDs present in the answer (2 of 5 chunks)", async () => {
+			const { index, paths } = await fiveChunkIndex();
+			expect(paths).toHaveLength(5);
+
+			setRequestUrlHandler(() => ({
+				json: {
+					content: [
+						{ text: "Per [1], and confirmed again in [3], widgets are great." },
+					],
+				},
+			}));
+
+			const settings = cloneSettings();
+			settings.activeProvider = "anthropic";
+			settings.providers.anthropic.apiKey = "key";
+
+			const result = await runPipeline("widget", settings, index, { k: 5 });
+
+			expect(result.citations).toEqual([paths[0] ?? "", paths[2] ?? ""]);
+		});
+
+		test("returns an empty citations list when the answer cites no IDs (general knowledge)", async () => {
+			const { index, paths } = await fiveChunkIndex();
+			expect(paths).toHaveLength(5);
+
+			setRequestUrlHandler(() => ({
+				json: {
+					content: [{ text: "That's general knowledge, not from your vault." }],
+				},
+			}));
+
+			const settings = cloneSettings();
+			settings.activeProvider = "anthropic";
+			settings.providers.anthropic.apiKey = "key";
+
+			const result = await runPipeline("widget", settings, index, { k: 5 });
+
+			expect(result.citations).toEqual([]);
+		});
+
+		test("ignores an invalid/out-of-range ID while still honoring a valid one", async () => {
+			const { index, paths } = await fiveChunkIndex();
+			expect(paths).toHaveLength(5);
+
+			setRequestUrlHandler(() => ({
+				json: {
+					content: [{ text: "See [2] and also [9] (which doesn't exist)." }],
+				},
+			}));
+
+			const settings = cloneSettings();
+			settings.activeProvider = "anthropic";
+			settings.providers.anthropic.apiKey = "key";
+
+			const result = await runPipeline("widget", settings, index, { k: 5 });
+
+			expect(result.citations).toEqual([paths[1] ?? ""]);
+		});
 	});
 
 	describe("images / vision routing", () => {
