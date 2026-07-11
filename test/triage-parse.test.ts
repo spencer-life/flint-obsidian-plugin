@@ -4,6 +4,8 @@ import {
 	NEXT_STEP_MAX_LENGTH,
 	parseTriageResponse,
 	sanitizeNextStep,
+	type TriageClassification,
+	validateTriageBatch,
 } from "../src/triage/parse";
 
 describe("extractBullets", () => {
@@ -168,5 +170,83 @@ describe("sanitizeNextStep", () => {
 		const long = "x".repeat(NEXT_STEP_MAX_LENGTH + 50);
 		const result = sanitizeNextStep(long);
 		expect(result.length).toBeLessThanOrEqual(NEXT_STEP_MAX_LENGTH);
+	});
+});
+
+describe("validateTriageBatch", () => {
+	function classification(item: string): TriageClassification {
+		return { item, target: "unsorted", nextStep: "do it" };
+	}
+
+	test("accepts a batch whose items exactly match the source order", () => {
+		const classifications = [
+			classification("buy a domain"),
+			classification("call the dentist"),
+		];
+		expect(() =>
+			validateTriageBatch(classifications, [
+				"buy a domain",
+				"call the dentist",
+			]),
+		).not.toThrow();
+	});
+
+	test("accepts trim-insensitive matches", () => {
+		const classifications = [classification("  buy a domain  ")];
+		expect(() =>
+			validateTriageBatch(classifications, ["buy a domain"]),
+		).not.toThrow();
+	});
+
+	test("rejects reordered entries", () => {
+		const classifications = [
+			classification("call the dentist"),
+			classification("buy a domain"),
+		];
+		expect(() =>
+			validateTriageBatch(classifications, [
+				"buy a domain",
+				"call the dentist",
+			]),
+		).toThrow();
+	});
+
+	test("rejects a duplicate entry standing in for a different bullet", () => {
+		const classifications = [
+			classification("buy a domain"),
+			classification("buy a domain"),
+			classification("water the plants"),
+		];
+		expect(() =>
+			validateTriageBatch(classifications, [
+				"buy a domain",
+				"call the dentist",
+				"water the plants",
+			]),
+		).toThrow();
+	});
+
+	test("rejects a batch missing an entry (short by one)", () => {
+		const classifications = [classification("buy a domain")];
+		expect(() =>
+			validateTriageBatch(classifications, [
+				"buy a domain",
+				"call the dentist",
+			]),
+		).toThrow();
+	});
+
+	test("rejects a batch with an extra entry", () => {
+		const classifications = [
+			classification("buy a domain"),
+			classification("call the dentist"),
+			classification("an entry the model invented"),
+		];
+		expect(() =>
+			validateTriageBatch(classifications, [
+				"buy a domain",
+				"call the dentist",
+			]),
+		).toThrow();
 	});
 });

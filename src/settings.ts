@@ -174,7 +174,7 @@ export function migrateTaskModels(
 }
 
 /** Current `settingsVersion` written by this build. */
-export const SETTINGS_VERSION = 5;
+export const SETTINGS_VERSION = 6;
 
 export interface SettingsLoadResult {
 	settings: FlintSettings;
@@ -280,6 +280,47 @@ export function loadSettingsFromRaw(raw: unknown): SettingsLoadResult {
 			if (isEmpty || isOldGemmaSuggestion) {
 				settings.taskModels[key] = { providerId: "nim", model: "z-ai/glm-5.2" };
 			}
+		}
+		migrated = true;
+	}
+
+	// v5 -> v6: task-specific NIM routing instead of one model for every
+	// background task. Triage/organize move off deepseek-v4-flash onto
+	// minimax-m2.7 (faster, no worse at the JSON/instruction-following these
+	// tasks need); dashboard moves off glm-5.2 onto llama-3.3-70b-instruct.
+	// llama-3.3-70b-instruct's STREAMING hangs on NIM's hosted endpoint —
+	// `chatWithTaskModel` only ever calls the non-streaming `chat()`, never
+	// `streamChat()`, so this is safe as long as the dashboard task keeps
+	// routing through it. Same survives-a-custom-override rule as v4 -> v5:
+	// only rewritten when the override was empty (inheriting the old
+	// suggestion) or still pinned to the old suggested model, so a
+	// deliberately-chosen custom override is untouched.
+	if (version < 6) {
+		for (const key of ["triage", "organize"] as const) {
+			const current = settings.taskModels[key];
+			const isEmpty = current.model.trim() === "";
+			const isOldFlashSuggestion =
+				current.model === "deepseek-ai/deepseek-v4-flash" &&
+				(current.providerId === "nim" || current.providerId === "");
+			if (isEmpty || isOldFlashSuggestion) {
+				settings.taskModels[key] = {
+					providerId: "nim",
+					model: "minimaxai/minimax-m2.7",
+				};
+			}
+		}
+
+		const currentDashboard = settings.taskModels.dashboard;
+		const isDashboardEmpty = currentDashboard.model.trim() === "";
+		const isOldGlmSuggestion =
+			currentDashboard.model === "z-ai/glm-5.2" &&
+			(currentDashboard.providerId === "nim" ||
+				currentDashboard.providerId === "");
+		if (isDashboardEmpty || isOldGlmSuggestion) {
+			settings.taskModels.dashboard = {
+				providerId: "nim",
+				model: "meta/llama-3.3-70b-instruct",
+			};
 		}
 		migrated = true;
 	}
@@ -595,7 +636,7 @@ export class FlintSettingTab extends PluginSettingTab {
 		);
 		addTaskModelSetting(
 			"Daily dashboard model",
-			"Suggested: z-ai/glm-5.2 (clean prose)",
+			"Suggested: meta/llama-3.3-70b-instruct (clean prose). Streaming hangs on NIM for this model — the dashboard task always calls non-streaming, so it's safe here.",
 			"dashboard",
 		);
 		addTaskModelSetting(

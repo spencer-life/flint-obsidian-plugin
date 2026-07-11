@@ -7,6 +7,7 @@ import {
 	type InboxBullet,
 	parseTriageResponse,
 	type TriageClassification,
+	validateTriageBatch,
 } from "./parse";
 import { buildTriagePrompt, type TriageTracker } from "./prompt";
 
@@ -109,11 +110,19 @@ export class TriageService {
 			trackers,
 		);
 
-		const raw = await chatWithTaskModel(this.plugin.settings, "triage", messages);
+		const raw = await chatWithTaskModel(
+			this.plugin.settings,
+			"triage",
+			messages,
+		);
 
 		let classifications: TriageClassification[];
 		try {
 			classifications = parseTriageResponse(raw);
+			validateTriageBatch(
+				classifications,
+				sourced.map((s) => s.bullet.item),
+			);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			new Notice(message);

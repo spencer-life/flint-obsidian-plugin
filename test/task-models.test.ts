@@ -164,7 +164,7 @@ describe("loadSettingsFromRaw", () => {
 		]);
 		expect(result.settings.taskModels.organize).toEqual({
 			providerId: "nim",
-			model: "deepseek-ai/deepseek-v4-flash",
+			model: "minimaxai/minimax-m2.7",
 		});
 		expect(result.settings.settingsVersion).toBe(SETTINGS_VERSION);
 	});
@@ -227,19 +227,19 @@ describe("loadSettingsFromRaw", () => {
 			expect(result.settings.settingsVersion).toBe(SETTINGS_VERSION);
 		});
 
-		test("leaves task models untouched by the chat-model rewrite", () => {
+		test("leaves a custom (non-suggested) task model untouched by the chat-model rewrite", () => {
 			const result = loadSettingsFromRaw({
 				settingsVersion: 2,
 				activeProvider: "nim",
 				activeModel: "deepseek-ai/deepseek-v4-pro",
 				taskModels: {
-					triage: { providerId: "nim", model: "deepseek-ai/deepseek-v4-flash" },
+					triage: { providerId: "openai", model: "gpt-4.1" },
 				},
 			});
 			expect(result.settings.activeModel).toBe("minimaxai/minimax-m2.7");
 			expect(result.settings.taskModels.triage).toEqual({
-				providerId: "nim",
-				model: "deepseek-ai/deepseek-v4-flash",
+				providerId: "openai",
+				model: "gpt-4.1",
 			});
 		});
 
@@ -308,7 +308,7 @@ describe("loadSettingsFromRaw", () => {
 			expect(result.settings.settingsVersion).toBe(SETTINGS_VERSION);
 		});
 
-		test("rewrites the deprecated gemma suggestion (pinned to nim) to glm-5.2", () => {
+		test("rewrites the deprecated gemma suggestion (pinned to nim), chaining through glm-5.2 to llama-3.3-70b-instruct at the current version", () => {
 			const result = loadSettingsFromRaw({
 				settingsVersion: 4,
 				taskModels: {
@@ -317,7 +317,7 @@ describe("loadSettingsFromRaw", () => {
 			});
 			expect(result.settings.taskModels.dashboard).toEqual({
 				providerId: "nim",
-				model: "z-ai/glm-5.2",
+				model: "meta/llama-3.3-70b-instruct",
 			});
 		});
 
@@ -373,7 +373,7 @@ describe("loadSettingsFromRaw", () => {
 			expect(result.migrated).toBe(false);
 		});
 
-		test("v0 (no settingsVersion) chains v2 -> v5 in one load", () => {
+		test("v0 (no settingsVersion) chains v2 -> v6 in one load", () => {
 			const result = loadSettingsFromRaw({
 				activeProvider: "nim",
 				activeModel: "deepseek-ai/deepseek-v4-pro",
@@ -383,7 +383,131 @@ describe("loadSettingsFromRaw", () => {
 				providerId: "nim",
 				model: "nvidia/nemotron-nano-12b-v2-vl",
 			});
+			expect(result.settings.taskModels.triage).toEqual({
+				providerId: "nim",
+				model: "minimaxai/minimax-m2.7",
+			});
+			expect(result.settings.taskModels.organize).toEqual({
+				providerId: "nim",
+				model: "minimaxai/minimax-m2.7",
+			});
+			expect(result.settings.taskModels.dashboard).toEqual({
+				providerId: "nim",
+				model: "meta/llama-3.3-70b-instruct",
+			});
 			expect(result.settings.settingsVersion).toBe(SETTINGS_VERSION);
+		});
+	});
+
+	describe("v5 -> v6: task-specific NIM routing (triage/organize -> minimax-m2.7, dashboard -> llama-3.3-70b-instruct)", () => {
+		test("rewrites the deprecated deepseek-v4-flash suggestion (pinned to nim) for triage and organize", () => {
+			const result = loadSettingsFromRaw({
+				settingsVersion: 5,
+				taskModels: {
+					triage: { providerId: "nim", model: "deepseek-ai/deepseek-v4-flash" },
+					organize: {
+						providerId: "nim",
+						model: "deepseek-ai/deepseek-v4-flash",
+					},
+				},
+			});
+			expect(result.settings.taskModels.triage).toEqual({
+				providerId: "nim",
+				model: "minimaxai/minimax-m2.7",
+			});
+			expect(result.settings.taskModels.organize).toEqual({
+				providerId: "nim",
+				model: "minimaxai/minimax-m2.7",
+			});
+			expect(result.migrated).toBe(true);
+			expect(result.settings.settingsVersion).toBe(SETTINGS_VERSION);
+		});
+
+		test("rewrites empty triage/organize/dashboard overrides to the new routing", () => {
+			const result = loadSettingsFromRaw({ settingsVersion: 5 });
+			expect(result.settings.taskModels.triage).toEqual({
+				providerId: "nim",
+				model: "minimaxai/minimax-m2.7",
+			});
+			expect(result.settings.taskModels.organize).toEqual({
+				providerId: "nim",
+				model: "minimaxai/minimax-m2.7",
+			});
+			expect(result.settings.taskModels.dashboard).toEqual({
+				providerId: "nim",
+				model: "meta/llama-3.3-70b-instruct",
+			});
+		});
+
+		test("rewrites the deprecated glm-5.2 dashboard suggestion (pinned to nim) to llama-3.3-70b-instruct", () => {
+			const result = loadSettingsFromRaw({
+				settingsVersion: 5,
+				taskModels: {
+					dashboard: { providerId: "nim", model: "z-ai/glm-5.2" },
+				},
+			});
+			expect(result.settings.taskModels.dashboard).toEqual({
+				providerId: "nim",
+				model: "meta/llama-3.3-70b-instruct",
+			});
+		});
+
+		test("leaves custom (non-suggested) triage/organize/dashboard overrides untouched", () => {
+			const result = loadSettingsFromRaw({
+				settingsVersion: 5,
+				taskModels: {
+					triage: { providerId: "openai", model: "gpt-4.1-mini" },
+					organize: { providerId: "anthropic", model: "claude-sonnet-4-5" },
+					dashboard: { providerId: "openai", model: "gpt-4o" },
+				},
+			});
+			expect(result.settings.taskModels.triage).toEqual({
+				providerId: "openai",
+				model: "gpt-4.1-mini",
+			});
+			expect(result.settings.taskModels.organize).toEqual({
+				providerId: "anthropic",
+				model: "claude-sonnet-4-5",
+			});
+			expect(result.settings.taskModels.dashboard).toEqual({
+				providerId: "openai",
+				model: "gpt-4o",
+			});
+		});
+
+		test("leaves htmlGenerate and vision untouched (not part of this routing change)", () => {
+			const result = loadSettingsFromRaw({
+				settingsVersion: 5,
+				taskModels: {
+					htmlGenerate: { providerId: "nim", model: "z-ai/glm-5.2" },
+					vision: {
+						providerId: "nim",
+						model: "nvidia/nemotron-nano-12b-v2-vl",
+					},
+				},
+			});
+			expect(result.settings.taskModels.htmlGenerate).toEqual({
+				providerId: "nim",
+				model: "z-ai/glm-5.2",
+			});
+			expect(result.settings.taskModels.vision).toEqual({
+				providerId: "nim",
+				model: "nvidia/nemotron-nano-12b-v2-vl",
+			});
+		});
+
+		test("already-current data is NOT re-migrated (one-shot)", () => {
+			const result = loadSettingsFromRaw({
+				settingsVersion: SETTINGS_VERSION,
+				taskModels: {
+					triage: { providerId: "nim", model: "deepseek-ai/deepseek-v4-flash" },
+				},
+			});
+			expect(result.settings.taskModels.triage).toEqual({
+				providerId: "nim",
+				model: "deepseek-ai/deepseek-v4-flash",
+			});
+			expect(result.migrated).toBe(false);
 		});
 	});
 });
@@ -581,5 +705,123 @@ describe("triage uses resolveTaskModel", () => {
 
 		const body = JSON.parse(requestUrlCalls[0]?.body ?? "{}");
 		expect(body.model).toBe("claude-sonnet-4-5");
+	});
+});
+
+describe("TriageService.buildPlan rejects a malformed batch", () => {
+	function makeService() {
+		const app = createFakeApp([
+			{
+				path: "00 Start/Inbox.md",
+				content: [
+					"- buy a domain for the rocket project",
+					"- call the dentist",
+				].join("\n"),
+			},
+		]);
+
+		const settings = cloneSettings();
+		settings.activeProvider = "anthropic";
+		settings.providers.anthropic.apiKey = "sk-ant-test";
+		settings.activeModel = "claude-sonnet-4-5";
+		settings.inboxNotes = ["00 Start/Inbox.md"];
+
+		const plugin = { app, settings } as unknown as FlintPlugin;
+		return new TriageService(plugin);
+	}
+
+	function respondWith(classifications: unknown[]): void {
+		setRequestUrlHandler(() => ({
+			json: { content: [{ text: JSON.stringify(classifications) }] },
+		}));
+	}
+
+	test("accepts an exact matching batch (regression baseline)", async () => {
+		const service = makeService();
+		respondWith([
+			{
+				item: "buy a domain for the rocket project",
+				target: "unsorted",
+				nextStep: "buy a domain",
+			},
+			{ item: "call the dentist", target: "unsorted", nextStep: "call" },
+		]);
+
+		const plan = await service.buildPlan();
+
+		expect(plan).not.toBeNull();
+		expect(plan?.unsortedCount).toBe(2);
+	});
+
+	test("rejects reordered entries instead of mispairing by index", async () => {
+		const service = makeService();
+		respondWith([
+			{ item: "call the dentist", target: "unsorted", nextStep: "call" },
+			{
+				item: "buy a domain for the rocket project",
+				target: "unsorted",
+				nextStep: "buy a domain",
+			},
+		]);
+
+		const plan = await service.buildPlan();
+
+		expect(plan).toBeNull();
+	});
+
+	test("rejects a duplicate entry standing in for a missing bullet", async () => {
+		const service = makeService();
+		respondWith([
+			{
+				item: "buy a domain for the rocket project",
+				target: "unsorted",
+				nextStep: "buy a domain",
+			},
+			{
+				item: "buy a domain for the rocket project",
+				target: "unsorted",
+				nextStep: "buy a domain again",
+			},
+		]);
+
+		const plan = await service.buildPlan();
+
+		expect(plan).toBeNull();
+	});
+
+	test("rejects a batch missing an entry", async () => {
+		const service = makeService();
+		respondWith([
+			{
+				item: "buy a domain for the rocket project",
+				target: "unsorted",
+				nextStep: "buy a domain",
+			},
+		]);
+
+		const plan = await service.buildPlan();
+
+		expect(plan).toBeNull();
+	});
+
+	test("rejects a batch with an extra entry", async () => {
+		const service = makeService();
+		respondWith([
+			{
+				item: "buy a domain for the rocket project",
+				target: "unsorted",
+				nextStep: "buy a domain",
+			},
+			{ item: "call the dentist", target: "unsorted", nextStep: "call" },
+			{
+				item: "an item the model invented",
+				target: "unsorted",
+				nextStep: "made up",
+			},
+		]);
+
+		const plan = await service.buildPlan();
+
+		expect(plan).toBeNull();
 	});
 });

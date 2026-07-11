@@ -144,3 +144,41 @@ export function parseTriageResponse(raw: string): TriageClassification[] {
 
 	return classifications;
 }
+
+/**
+ * Validates a parsed classification batch against the source bullets it's
+ * meant to answer, POSITIONALLY: the batch must be exactly as long as
+ * `sourcedItems`, and each entry's `item` must trim-match the source bullet
+ * at the same index. There's no stable id on a classification to pair it
+ * against a source bullet by — only the `item` text — so a missing,
+ * duplicated, reordered, or shifted model entry can't be told apart from a
+ * trustworthy one once you start pairing by array position alone. Rejecting
+ * the WHOLE batch on any mismatch (instead of best-effort pairing, which is
+ * what silently sent next-steps to the wrong project and deleted the wrong
+ * inbox bullet) is the only safe response. Throws a descriptive `Error` on
+ * any mismatch — callers must never write garbage to the vault.
+ */
+export function validateTriageBatch(
+	classifications: TriageClassification[],
+	sourcedItems: string[],
+): void {
+	if (classifications.length !== sourcedItems.length) {
+		throw new Error(
+			`Flint: the AI's triage response returned ${classifications.length} item(s) for ${sourcedItems.length} inbox bullet(s) — rejecting the batch without writing changes.`,
+		);
+	}
+
+	for (let i = 0; i < classifications.length; i++) {
+		const expected = sourcedItems[i];
+		const actual = classifications[i];
+		if (
+			expected === undefined ||
+			actual === undefined ||
+			actual.item.trim() !== expected.trim()
+		) {
+			throw new Error(
+				"Flint: the AI's triage response was mismatched or out of order — rejecting the batch without writing changes.",
+			);
+		}
+	}
+}
