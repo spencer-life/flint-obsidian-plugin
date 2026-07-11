@@ -4,7 +4,7 @@ import "./obsidian-mock";
 const { buildSummaryPrompt } = await import("../src/dashboard/daily");
 
 describe("buildSummaryPrompt", () => {
-	test("includes the Obsidian capabilities brief in the system message", () => {
+	test("does not include the Obsidian capabilities catalog (summary prompt, no write manual needed)", () => {
 		const messages = buildSummaryPrompt([
 			{ path: "01 Projects/rocket.md", excerpt: "Liquid fuel is dense." },
 		]);
@@ -12,6 +12,6 @@ describe("buildSummaryPrompt", () => {
 		if (!system) throw new Error("expected a system message");
 
 		expect(system.role).toBe("system");
-		expect(system.content).toContain("What Obsidian can render and do");
+		expect(system.content).not.toContain("What Obsidian can render and do");
 	});
 });

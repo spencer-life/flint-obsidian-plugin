@@ -51,9 +51,9 @@ describe("buildSystemPrompt", () => {
 		expect(prompt).toContain("No relevant notes were found");
 	});
 
-	test("includes the Obsidian capabilities brief", () => {
+	test("does not include the Obsidian capabilities catalog (read-only prompt, no write manual needed)", () => {
 		const prompt = buildSystemPrompt([]);
-		expect(prompt).toContain("What Obsidian can render and do");
+		expect(prompt).not.toContain("What Obsidian can render and do");
 	});
 });
 
